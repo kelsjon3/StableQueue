@@ -1,0 +1,20 @@
+version: '3.8'
+services:
+  mobilesd:
+    build: .
+    container_name: mobilesd
+    ports:
+      - "8080:3000"
+    volumes:
+      - ./data:/usr/src/app/data
+      - ./stablediffusion_saves:/app/saves
+      - ./loras:/app/loras
+      - ./checkpoints:/app/checkpoints
+    environment:
+      - PORT=3000
+      - CONFIG_DATA_PATH=/usr/src/app/data
+      - STABLE_DIFFUSION_SAVE_PATH=/app/saves
+      - LORA_PATH=/app/loras
+      - CHECKPOINT_PATH=/app/checkpoints
+      - NODE_ENV=development
+    restart: unless-stopped
