@@ -18,7 +18,20 @@ app.get('/status', (req, res) => {
   res.json({ status: 'MobileSD API is running' });
 });
 
-// TODO: Add API routes here (e.g., app.use('/api/v1/servers', serverRoutes));
+// API routes
+const serverRoutes = require('./routes/servers');
+app.use('/api/v1/servers', serverRoutes);
+
+const generationRoutes = require('./routes/generation');
+app.use('/api/v1', generationRoutes); // Contains /generate, /progress
+
+const resourceRoutes = require('./routes/resources');
+app.use('/api/v1', resourceRoutes); // Contains /loras, /checkpoints
+
+const civitaiRoutes = require('./routes/civitai');
+app.use('/api/v1', civitaiRoutes); // Contains /civitai/image-info, /civitai/download-model
+
+// TODO: Any remaining API routes?
 
 app.listen(PORT, () => {
   console.log(`MobileSD server listening on port ${PORT}`);
