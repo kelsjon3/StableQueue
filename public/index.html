@@ -1,12 +1,163 @@
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MobileSD</title>
+    <title>MobileSD Interface</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <p>Frontend will be built here.</p>
+    <header>
+        <h1>MobileSD</h1>
+        <nav>
+            <button id="nav-generator" class="nav-button active">Generator</button>
+            <button id="nav-server-setup" class="nav-button">Server Setup</button>
+        </nav>
+    </header>
+
+    <main id="main-content">
+
+        <section id="generator-view">
+            <h2>Image Generation</h2>
+
+            <section id="server-selection-area" class="card">
+                <label for="server-alias-select">Target Server:</label>
+                <select id="server-alias-select" name="server_alias">
+                    <option value="">Loading servers...</option>
+                </select>
+                <span id="server-status"></span>
+            </section>
+
+            <section id="civitai-integration-area" class="card">
+                <h3>Civitai Helper</h3>
+                <label for="civitai-image-id">Civitai Image ID:</label>
+                <input type="text" id="civitai-image-id" name="civitai_image_id">
+                <button id="fetch-civitai-info-btn">Fetch & Populate</button>
+                <div id="civitai-resources-list"></div>
+            </section>
+
+            <section id="generation-params" class="card">
+                <h3>Generation Parameters</h3>
+                <div class="form-group">
+                    <label for="positive-prompt">Positive Prompt:</label>
+                    <textarea id="positive-prompt" name="positive_prompt" rows="4"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="negative-prompt">Negative Prompt:</label>
+                    <textarea id="negative-prompt" name="negative_prompt" rows="2"></textarea>
+                </div>
+                <div class="grid-container">
+                    <div class="form-group">
+                        <label for="sampler-name">Sampler:</label>
+                        <input type="text" id="sampler-name" name="sampler_name" value="Euler a">
+                    </div>
+                    <div class="form-group">
+                        <label for="steps">Steps:</label>
+                        <input type="number" id="steps" name="steps" value="20" min="1" max="150">
+                    </div>
+                    <div class="form-group">
+                        <label for="cfg-scale">CFG Scale:</label>
+                        <input type="number" id="cfg-scale" name="cfg_scale" value="7.0" step="0.5" min="1">
+                    </div>
+                     <div class="form-group">
+                        <label for="width">Width:</label>
+                        <input type="number" id="width" name="width" value="512" step="64">
+                    </div>
+                     <div class="form-group">
+                        <label for="height">Height:</label>
+                        <input type="number" id="height" name="height" value="512" step="64">
+                    </div>
+                    <div class="form-group">
+                        <label for="seed">Seed:</label>
+                        <input type="number" id="seed" name="seed" value="-1">
+                    </div>
+                </div>
+            </section>
+
+            <section id="lora-selection-area" class="card">
+                <h3>LoRAs</h3>
+                <div id="lora-rows-container">
+                </div>
+                 <button id="add-lora-btn">+ Add LoRA</button>
+                 <div id="lora-row-template" style="display: none;" class="lora-row grid-container">
+                     <select class="lora-select">
+                         <option value="">Select LoRA...</option>
+                     </select>
+                     <input type="number" class="lora-weight" value="0.8" step="0.1" min="-1" max="2">
+                     <button class="remove-lora-btn">Remove</button>
+                 </div>
+            </section>
+            
+            <section id="checkpoint-selection-area" class="card">
+                 <h3>Checkpoint</h3>
+                 <select id="checkpoint-select" name="checkpoint_name">
+                     <option value="">Loading checkpoints...</option>
+                 </select>
+            </section>
+
+            <section id="action-area">
+                <button id="generate-btn" class="primary-button">Generate Image</button>
+            </section>
+
+            <section id="progress-area" class="card">
+                <h3>Progress</h3>
+                <progress id="progress-bar" value="0" max="100"></progress>
+                <p id="progress-text">Idle</p>
+                <img id="progress-image-preview" src="#" alt="Progress Preview" style="display: none; max-width: 256px;">
+            </section>
+
+            <section id="output-area" class="card">
+                <h3>Output</h3>
+                <div id="output-image-container">
+                </div>
+                 <div id="output-info">
+                 </div>
+            </section>
+
+        </section>
+
+        <section id="server-setup-view" style="display: none;">
+            <h2>Server Configuration</h2>
+             <div id="server-list-container" class="card">
+                 <h3>Existing Servers</h3>
+                 <ul id="server-list"></ul>
+             </div>
+             <div id="add-server-form-container" class="card">
+                 <h3>Add/Edit Server</h3>
+                 <form id="server-form">
+                     <input type="hidden" id="edit-alias" value="">
+                     <div class="form-group">
+                         <label for="server-alias">Alias:</label>
+                         <input type="text" id="server-alias" required>
+                     </div>
+                     <div class="form-group">
+                         <label for="server-api-url">API URL (e.g., http://host:port):</label>
+                         <input type="url" id="server-api-url" required>
+                     </div>
+                     <div class="form-group">
+                         <label>Authentication (Basic Auth):</label>
+                         <div>
+                            <label for="server-auth-user">Username:</label>
+                            <input type="text" id="server-auth-user">
+                         </div>
+                          <div>
+                            <label for="server-auth-pass">Password:</label>
+                            <input type="password" id="server-auth-pass">
+                         </div>
+                         <small>Leave blank for no authentication.</small>
+                     </div>
+                     <button type="submit" id="save-server-btn" class="primary-button">Save Server</button>
+                     <button type="button" id="cancel-edit-btn" style="display: none;">Cancel Edit</button>
+                 </form>
+             </div>
+        </section>
+
+    </main>
+
+    <footer>
+        <p>MobileSD Interface</p>
+    </footer>
+
     <script src="js/app.js"></script>
 </body>
 </html>

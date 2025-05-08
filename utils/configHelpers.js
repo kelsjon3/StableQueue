@@ -47,63 +47,65 @@ const writeServersConfig = async (config) => {
 const VALID_MODEL_EXTENSIONS = ['.safetensors', '.pt', '.ckpt']; // Add other relevant extensions if needed
 const METADATA_EXT = '.civitai.json';
 
+// Base path for model scanning - used to calculate relative paths if needed
+// This assumes your LORA_PATH and CHECKPOINT_PATH are somewhere like /mnt/user/models/Lora, /mnt/user/models/Stable-diffusion
+// And you want relative paths like "MyCollection/model.safetensors" instead of just "model.safetensors"
+// For simplicity, let's assume the .../models/ part is the base. This might need adjustment based on actual paths.
+// Or, we pass the specific model type base path (LORA_PATH, CHECKPOINT_PATH) to calculate relative path from there.
+
 // Helper function to scan a directory for models and their metadata
-const scanModelDirectory = async (directoryPath) => {
-  if (!directoryPath) {
-    console.warn('WARN: Model directory path environment variable not set.');
-    return []; // Return empty if the path isn't configured
-  }
-
+const scanModelDirectory = async (directoryPath, fileExtensions, rootModelPath) => {
+  const models = [];
   try {
-    // Check if directory exists
-    await fs.access(directoryPath);
-
     const dirents = await fs.readdir(directoryPath, { withFileTypes: true });
-    const modelFiles = dirents
-      .filter(dirent => dirent.isFile() && VALID_MODEL_EXTENSIONS.includes(path.extname(dirent.name).toLowerCase()))
-      .map(dirent => dirent.name);
+    for (const dirent of dirents) {
+      const fullPath = path.join(directoryPath, dirent.name);
+      if (dirent.isDirectory()) {
+        // Recursively scan subdirectories
+        const subModels = await scanModelDirectory(fullPath, fileExtensions, rootModelPath);
+        models.push(...subModels);
+      } else if (dirent.isFile() && fileExtensions.some(ext => dirent.name.toLowerCase().endsWith(ext))) {
+        let modelInfo = {
+          filename: dirent.name,
+          // Calculate relative path from the rootModelPath (e.g., LORA_PATH or CHECKPOINT_PATH)
+          // to the directory containing the model file.
+          // Example: if root is /models/Lora and file is /models/Lora/Sub/model.safetensors, relPath is "Sub"
+          // if file is /models/Lora/model.safetensors, relPath is "."
+          relativePath: path.relative(rootModelPath, directoryPath)
+        };
 
-    const results = [];
-    for (const modelFile of modelFiles) {
-      const baseName = path.basename(modelFile, path.extname(modelFile));
-      const metadataPath = path.join(directoryPath, baseName + METADATA_EXT);
-      let metadata = {};
+        // Try to find and read an associated .civitai.json file
+        const baseName = dirent.name.substring(0, dirent.name.lastIndexOf('.'));
+        const jsonPath = path.join(directoryPath, `${baseName}.civitai.json`);
+        const previewImagePath = path.join(directoryPath, `${baseName}.preview.png`); // Common preview naming
 
-      try {
-        await fs.access(metadataPath);
-        const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-        const parsedJson = JSON.parse(metadataContent);
-        metadata.civitaiModelId = parsedJson?.modelId?.toString() || null;
-        metadata.civitaiModelVersionId = parsedJson?.id?.toString() || parsedJson?.modelVersionId?.toString() || null;
-      } catch (metaError) {
-        if (metaError.code !== 'ENOENT') {
-          console.warn(`WARN: Could not read or parse metadata for ${modelFile}:`, metaError.message);
+        try {
+          const jsonData = await fs.readFile(jsonPath, 'utf-8');
+          const parsedJson = JSON.parse(jsonData);
+          modelInfo = { ...modelInfo, ...parsedJson }; // Merge JSON data
+        } catch (jsonError) {
+          // .civitai.json not found or unreadable, proceed without it
+          // console.debug(`No .civitai.json for ${dirent.name} or error reading: ${jsonError.message}`);
         }
-        metadata.civitaiModelId = null;
-        metadata.civitaiModelVersionId = null;
+        
+        // Check for preview image (optional, just add its existence or path if needed by UI)
+        try {
+          await fs.access(previewImagePath); // Check if preview exists
+          modelInfo.previewAvailable = true;
+          // Optionally, modelInfo.previewPath = relative path to preview for direct serving if ever needed
+        } catch (previewError) {
+          modelInfo.previewAvailable = false;
+        }
+
+        models.push(modelInfo);
       }
-
-      results.push({
-        name: modelFile,
-        ...metadata
-      });
     }
-    
-    results.sort((a, b) => a.name.localeCompare(b.name));
-    
-    return results;
-
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.warn(`WARN: Model directory not found: ${directoryPath}`);
-      return [];
-    } else if (error.code === 'EACCES') {
-       console.error(`ERROR: Permission denied reading directory: ${directoryPath}`);
-       throw new Error(`Permission denied accessing model directory: ${directoryPath}`);
-    }
-    console.error(`Error scanning model directory ${directoryPath}:`, error);
-    throw error;
+    console.error(`Error scanning directory ${directoryPath}:`, error);
+    // If a specific directory is inaccessible, we might want to skip it rather than failing all
+    // For now, it will propagate up if it's a critical error for the initial path
   }
+  return models;
 };
 
 // --- Exports --- 

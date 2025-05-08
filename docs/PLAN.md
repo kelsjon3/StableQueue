@@ -25,15 +25,15 @@
 
 1.  **General:** All frontend assets served by the Node.js/Express application from the `public/` directory.
 2.  **Main Generation Page:**
-    *   Server Selection Dropdown (fetch `/api/v1/servers`).
-    *   Input Fields (Prompts, Seed, Width, Height, Steps, CFG, Sampler).
-    *   LoRA Selection (fetch `/api/v1/loras`, dynamic rows for name/weight).
-    *   Checkpoint Selection (fetch `/api/v1/checkpoints`).
-    *   "Generate Image" Button (call `POST /api/v1/generate`).
-    *   Progress Display (poll `GET /api/v1/progress`).
-    *   Image Display Area.
+    *   Server Selection Dropdown (fetch `/api/v1/servers`). *(Implemented: Dynamically populated from backend).*
+    *   Input Fields (Prompts, Seed, Width, Height, Steps, CFG, Sampler). *(HTML structure in place).*
+    *   LoRA Selection (fetch `/api/v1/loras`, dynamic rows for name/weight). *(Implemented: Fetches LoRAs, allows adding/removing rows, populates dropdowns with subfolder paths, recursive backend scan in place).*
+    *   Checkpoint Selection (fetch `/api/v1/checkpoints`). *(Implemented: Populated from backend, displays subfolder paths, recursive backend scan in place).*
+    *   "Generate Image" Button (call `POST /api/v1/generate`). *(Pending)*
+    *   Progress Display (poll `GET /api/v1/progress`). *(Pending)*
+    *   Image Display Area. *(Pending HTML structure / logic)*
 3.  **Server Setup Page/Tab:**
-    *   UI for CRUD operations on server configurations (call `/api/v1/servers` endpoints).
+    *   UI for CRUD operations on server configurations (call `/api/v1/servers` endpoints). *(Implemented: Full CRUD functionality with UI for adding, listing, editing, and deleting server configurations. Includes tab navigation).*
 4.  **Civitai Integration UI:**
     *   Input for Civitai Image ID & "Fetch" button (call `POST /api/v1/civitai/image-info`).
     *   Populate form fields from response.
@@ -69,9 +69,14 @@
 2.  **Phase 2: On-Demand Model Sync & Advanced Features (Future)**
     *   (Details as before: Lightweight API Script, MobileSD Backend/Frontend Updates for Sync)
 3.  **Phase 3: UI Refinement & Full Frontend Implementation - CURRENT FOCUS**
-    *   Dedicated Server Setup Page/Tab UI.
+    *   Dedicated Server Setup Page/Tab UI. *(Completed: Full CRUD UI for server configurations, including tab navigation).*
     *   Refine main generation page UI, progress display, image display.
-    *   Ensure UI is responsive.
+        *   Server selection dropdown. *(Completed)*
+        *   Checkpoint selection dropdown, including recursive scan and subfolder display. *(Completed)*
+        *   LoRA selection UI with dynamic rows, recursive scan, and subfolder display. *(Completed)*
+        *   Implement Civitai Helper UI (fetch info, download). *(Pending)*
+        *   Implement core generation logic (send request, poll progress, display results). *(Pending)*
+    *   Ensure UI is responsive. *(Ongoing)*
     *   *Note: This phase number was shifted; it now represents the full frontend development based on completed Phase 1 backend.*
 4.  **Phase 4: Testing, Optimization, and Documentation (Ongoing & Final)**
     *   (Details as before)

@@ -60,26 +60,43 @@ router.get('/:alias', async (req, res) => {
 // PUT /api/v1/servers/:alias - Update a server configuration
 router.put('/:alias', async (req, res) => {
   try {
-    const { apiUrl, auth } = req.body;
-    const aliasToUpdate = req.params.alias;
+    const newAlias = req.body.alias; // Get the new alias from the body
+    const { apiUrl, authUser, authPass } = req.body; // Get other fields, matching client
+    const originalAlias = req.params.alias; // The alias used to identify the server in the URL
 
-    if (!apiUrl) { // Alias itself cannot be changed via PUT to this endpoint, only its properties
-      return res.status(400).json({ message: 'Missing required field: apiUrl.' });
+    if (!newAlias || !apiUrl) {
+      return res.status(400).json({ message: 'Missing required fields: alias and apiUrl.' });
     }
 
     let servers = await readServersConfig();
-    const serverIndex = servers.findIndex(s => s.alias === aliasToUpdate);
+    const serverIndex = servers.findIndex(s => s.alias === originalAlias);
 
     if (serverIndex === -1) {
       return res.status(404).json({ message: 'Server configuration not found to update.' });
     }
 
+    // If alias is being changed, check if the new alias already exists (and isn't the current server)
+    if (newAlias !== originalAlias && servers.some(s => s.alias === newAlias)) {
+      return res.status(400).json({ message: `Another server with alias '${newAlias}' already exists.` });
+    }
+
     // Update the server details
-    servers[serverIndex] = { ...servers[serverIndex], apiUrl, auth: auth || null };
+    servers[serverIndex] = {
+      alias: newAlias, // Use the new alias from the body
+      apiUrl,
+      // Store authUser and authPass; store as undefined if empty string from form so they might be omitted or set to null
+      authUser: authUser || undefined, 
+      authPass: authPass || undefined,
+    };
     
+    // Clean up undefined auth properties to ensure they are omitted or null if not provided
+    if (servers[serverIndex].authUser === undefined) delete servers[serverIndex].authUser;
+    if (servers[serverIndex].authPass === undefined) delete servers[serverIndex].authPass;
+
     await writeServersConfig(servers);
     res.json({ message: 'Server configuration updated successfully.', server: servers[serverIndex] });
   } catch (error) {
+    console.error('Error updating server configuration:', error);
     res.status(500).json({ message: 'Failed to update server configuration.', error: error.message });
   }
 });
