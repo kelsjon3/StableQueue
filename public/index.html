@@ -48,8 +48,12 @@
                 </div>
                 <div class="grid-container">
                     <div class="form-group">
-                        <label for="sampler-name">Sampler:</label>
-                        <input type="text" id="sampler-name" name="sampler_name" value="Euler a">
+                        <label for="style-preset">Style Preset:</label>
+                        <input type="text" id="style-preset" name="style_preset" value="simple">
+                    </div>
+                    <div class="form-group">
+                        <label for="sampler-name">Sampler Name:</label>
+                        <input type="text" id="sampler-name" name="sampler_name" value="Euler">
                     </div>
                     <div class="form-group">
                         <label for="steps">Steps:</label>
@@ -57,7 +61,7 @@
                     </div>
                     <div class="form-group">
                         <label for="cfg-scale">CFG Scale:</label>
-                        <input type="number" id="cfg-scale" name="cfg_scale" value="7.0" step="0.5" min="1">
+                        <input type="number" id="cfg-scale" name="cfg_scale" value="7.0" step="0.1" min="1">
                     </div>
                      <div class="form-group">
                         <label for="width">Width:</label>
@@ -68,9 +72,53 @@
                         <input type="number" id="height" name="height" value="512" step="64">
                     </div>
                     <div class="form-group">
-                        <label for="seed">Seed:</label>
-                        <input type="number" id="seed" name="seed" value="-1">
+                        <label for="seed">Seed (-1 for random):</label>
+                        <input type="text" id="seed" name="seed" value="">
                     </div>
+                    <div class="form-group">
+                        <label for="subseed">Subseed (-1 for random):</label>
+                        <input type="text" id="subseed" name="subseed" value="">
+                    </div>
+                    <div class="form-group">
+                        <label for="num-images">Number of Images:</label>
+                        <input type="number" id="num-images" name="num_images" value="1" min="1" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label for="sampling-category">Sampling Category:</label>
+                        <input type="text" id="sampling-category" name="sampling_category" value="Both">
+                    </div>
+                    <div class="form-group">
+                        <label for="upscaler-model">Upscaler Model:</label>
+                        <input type="text" id="upscaler-model" name="upscaler_model" value="None">
+                    </div>
+                    <div class="form-group">
+                        <label for="refiner-model">Refiner Model:</label>
+                        <input type="text" id="refiner-model" name="refiner_model" value="None">
+                    </div>
+                    <div class="form-group">
+                        <label for="scheduler-or-quality-preset">Scheduler/Quality Preset:</label>
+                        <input type="text" id="scheduler-or-quality-preset" name="scheduler_or_quality_preset" value="Balanced">
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="prompt-matrix-variation-toggle" name="prompt_matrix_variation_toggle">
+                        <label for="prompt-matrix-variation-toggle">Prompt Matrix/Variation</label>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="enable-hires-fix" name="enable_hires_fix">
+                        <label for="enable-hires-fix">Enable Hires. Fix</label>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="restore-faces" name="restore_faces">
+                        <label for="restore-faces">Restore Faces</label>
+                    </div>
+                    <!-- 
+                        Hiding resize_method_txt2img for now as its use is tied to hires fix or presets
+                        It was "Crop and Resize" in HAR data index 16.
+                    <div class="form-group">
+                        <label for="resize-method-txt2img">Resize Method (txt2img):</label>
+                        <input type="text" id="resize-method-txt2img" name="resize_method_txt2img" value="Crop and Resize">
+                    </div>
+                    -->
                 </div>
             </section>
 
