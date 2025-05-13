@@ -42,6 +42,27 @@ const writeServersConfig = async (config) => {
   }
 };
 
+// Helper function to get a specific server's config by its alias
+const getServerByAlias = async (alias) => {
+  const servers = await readServersConfig();
+  const server = servers.find(s => s.alias === alias);
+  return server; // Returns the server object or undefined if not found
+};
+
+// Helper function to get Axios config, including basic auth if needed
+const getAxiosConfig = (server) => {
+  const config = {};
+  if (server.username && server.password) {
+    const credentials = Buffer.from(`${server.username}:${server.password}`).toString('base64');
+    config.headers = {
+      'Authorization': `Basic ${credentials}`
+    };
+  }
+  // Add other default headers if necessary, e.g., Content-Type
+  // config.headers = { ...config.headers, 'Content-Type': 'application/json' };
+  return config;
+};
+
 // --- Model Scanning Helpers --- 
 
 const VALID_MODEL_EXTENSIONS = ['.safetensors', '.pt', '.ckpt']; // Add other relevant extensions if needed
@@ -115,4 +136,6 @@ module.exports = {
   readServersConfig,
   writeServersConfig,
   scanModelDirectory,
+  getServerByAlias,
+  getAxiosConfig,
 }; 

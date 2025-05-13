@@ -110,14 +110,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 checkpointsData.forEach(checkpointObj => {
                     const option = document.createElement('option');
                     if (checkpointObj && typeof checkpointObj.filename === 'string') {
-                        option.value = checkpointObj.filename;
-                        let displayText = checkpointObj.filename;
+                        let fullPath = checkpointObj.filename;
                         if (checkpointObj.relativePath && checkpointObj.relativePath !== '') {
-                            // Prepend subfolder if relativePath is not empty or "."
-                            // path.join isn't available client-side, simple concatenation is fine here.
-                            displayText = `${checkpointObj.relativePath}/${checkpointObj.filename}`;
+                            fullPath = `${checkpointObj.relativePath}/${checkpointObj.filename}`;
                         }
-                        option.textContent = displayText;
+                        option.value = fullPath;  // Set value to full path
+                        option.textContent = fullPath;  // Display full path
                         checkpointSelect.appendChild(option);
                     } else {
                         console.warn('Received invalid checkpoint object:', checkpointObj);
@@ -438,9 +436,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (progressBar) progressBar.value = 0;
         if (progressImagePreview) progressImagePreview.src = ''; progressImagePreview.style.display = 'none';
 
-
-        const serverAlias = serverAliasSelect.value;
-        if (!serverAlias) {
+        const serverAliasValue = serverAliasSelect.value;
+        if (!serverAliasValue) {
             alert('Please select a server.');
             generateBtn.disabled = false;
             generateBtn.textContent = 'Generate Image';
@@ -451,12 +448,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedLoras = [];
         const loraRows = loraRowsContainer.querySelectorAll('.lora-row');
         loraRows.forEach(row => {
-            const loraNameSelect = row.querySelector('select[name="lora-name"]');
-            const loraWeightInput = row.querySelector('input[name="lora-weight"]');
-            if (loraNameSelect && loraWeightInput && loraNameSelect.value) {
+            const loraSelectElement = row.querySelector('.lora-select');
+            const loraWeightElement = row.querySelector('.lora-weight');
+            
+            if (loraSelectElement && loraWeightElement && loraSelectElement.value) {
+                const selectedLoraFilename = loraSelectElement.value;
+                const loraCacheEntry = allLorasCache.find(l => l.filename === selectedLoraFilename);
+                const loraNameForPrompt = loraCacheEntry ? loraCacheEntry.name_for_prompt || selectedLoraFilename.replace(/\.[^/.]+$/, "") : selectedLoraFilename.replace(/\.[^/.]+$/, "");
+
                 selectedLoras.push({
-                    name: loraNameSelect.value, // This should be the filename without extension
-                    weight: parseFloat(loraWeightInput.value) || 0.7
+                    name: loraNameForPrompt,
+                    weight: parseFloat(loraWeightElement.value) || 0.8
                 });
             }
         });
@@ -467,15 +469,12 @@ document.addEventListener('DOMContentLoaded', () => {
             finalPositivePrompt = `${positivePromptInput.value} ${loraString}`.trim();
         }
 
-
-        const generationParams = {
-            server_alias: serverAlias,
+        // --- Construct the generation_params object FIRST ---
+        const genParams = {
             positive_prompt: finalPositivePrompt,
             negative_prompt: negativePromptInput.value || "",
-            
-            // New Forge API params - use defaults if element not found or value is empty/null
+            checkpoint_name: checkpointSelect.value, // Ensure this is selected
             style_preset: stylePresetInput?.value || "simple",
-            // prompt_matrix_variation_toggle: promptMatrixVariationToggleInput?.checked || false, // Example for a checkbox
             sampling_category: samplingCategoryInput?.value || "Both",
             enable_hires_fix: enableHiresFixInput?.checked || false,
             upscaler_model: upscalerModelInput?.value || "None",
@@ -483,25 +482,20 @@ document.addEventListener('DOMContentLoaded', () => {
             num_images: parseInt(numImagesInput?.value, 10) || 1,
             seed: seedInput.value || "", // Keep as string, backend handles empty as random
             subseed: subseedInput?.value || "", // Keep as string
-            // resize_method_txt2img: resizeMethodTxt2imgInput?.value || "Crop and Resize",
             width: parseInt(widthInput.value, 10) || -1,
             height: parseInt(heightInput.value, 10) || -1,
-            steps: parseInt(stepsInput.value, 10) || -1, // Forge default might be different, use -1 for "default"
-            cfg_scale: parseFloat(cfgScaleInput.value) || 0, // Forge default might be different, use 0 for "default"
-            sampler_name: samplerNameInput?.value || "Euler", // Added sampler_name
+            steps: parseInt(stepsInput.value, 10) || -1,
+            cfg_scale: parseFloat(cfgScaleInput.value) || 0, // Changed key to cfg_scale
+            sampler_name: samplerNameInput?.value || "Euler",
             restore_faces: restoreFacesInput?.checked || false,
             scheduler_or_quality_preset: schedulerOrQualityPresetInput?.value || "Balanced",
+            // Add any other params needed inside here
+        };
 
-            // ControlNet and img2img params - sending defaults for now
-            // controlnet_preprocessors: [],
-            // controlnet_models: [],
-            // init_image_base64: "",
-            // mask_image_base64: "",
-            // resize_mode_img2img: "Just Resize",
-
-            // MobileSD specific controls - backend handles these now based on SSE
-            // save_image_to_server_path: true, 
-            // return_image_data: true, // Client will get data via SSE
+        // --- Construct the FINAL request body ---
+        const requestBody = {
+            target_server_alias: serverAliasValue,
+            generation_params: genParams
         };
 
         // Close any existing SSE connection
@@ -511,25 +505,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            console.log("Sending generation request:", generationParams);
+            console.log("Sending generation request body:", JSON.stringify(requestBody, null, 2)); // Log the correct body
             const response = await fetch('/api/v1/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(generationParams)
+                body: JSON.stringify(requestBody) // Send the correctly structured body
             });
 
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ message: 'Unknown error during generation request.' }));
-                throw new Error(errorData.message || `HTTP error! Status: ${response.status}`);
+                // Attempt to parse error message from backend JSON response
+                let errorMsg = `HTTP error! Status: ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    errorMsg = errorData.error || errorData.message || errorMsg; 
+                } catch (e) {
+                    // Ignore if response is not JSON
+                }
+                throw new Error(errorMsg);
             }
 
             const result = await response.json();
-            if (result.success && result.session_hash) {
-                progressText.textContent = `Request queued. Session: ${result.session_hash}. Waiting for progress...`;
-                startListeningForProgress(result.server_alias, result.session_hash);
+            // --- THIS PART NEEDS REPLACEMENT FOR PHASE 2/3 ---
+            // The backend now returns { mobilesd_job_id: "..." } on 202 Accepted
+            // We need to handle this new response and start polling the status endpoint
+            console.log("Received response from /generate:", result);
+            if (response.status === 202 && result.mobilesd_job_id) {
+                // SUCCESS! Job was queued.
+                 if (progressText) progressText.textContent = `Job submitted successfully! ID: ${result.mobilesd_job_id}. Waiting for status...`;
+                // TODO: Start polling GET /api/v1/queue/jobs/{result.mobilesd_job_id}/status
+                // For now, just re-enable the button after successful submission
+                generateBtn.disabled = false;
+                generateBtn.textContent = 'Generate Image';
+                alert(`Job submitted with ID: ${result.mobilesd_job_id}. Check console/queue for progress.`); // Temporary feedback
             } else {
-                throw new Error(result.message || 'Failed to start generation session.');
+                // Handle unexpected success response format
+                throw new Error(result.message || result.error || 'Unexpected response after submitting job.');
             }
+            // --- END REPLACEMENT AREA ---
 
         } catch (error) {
             console.error('Error submitting generation request:', error);
@@ -538,160 +550,6 @@ document.addEventListener('DOMContentLoaded', () => {
             generateBtn.disabled = false;
             generateBtn.textContent = 'Generate Image';
         }
-    }
-
-    function startListeningForProgress(serverAlias, sessionHash) {
-        if (!serverAlias || !sessionHash) {
-            console.error("Server alias or session hash missing for SSE.");
-            if (progressText) progressText.textContent = 'Error: Cannot connect to progress stream (missing identifiers).';
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Generate Image';
-            return;
-        }
-
-        const url = `/api/v1/progress?server_alias=${encodeURIComponent(serverAlias)}&session_hash=${encodeURIComponent(sessionHash)}`;
-        currentEventSource = new EventSource(url);
-        console.log(`Connecting to SSE at: ${url}`);
-
-        currentEventSource.onopen = () => {
-            console.log('SSE connection established with /api/v1/progress.');
-            if (progressText) progressText.textContent = 'Connected to progress stream... Waiting for updates.';
-            generateBtn.disabled = true; // Keep disabled while listening
-            generateBtn.textContent = 'Generating...';
-        };
-
-        currentEventSource.onmessage = (event) => {
-            console.log('Raw SSE Data:', event.data);
-            // if (progressText) progressText.textContent = 'Receiving progress...'; // Can be too chatty
-
-            try {
-                const sseData = JSON.parse(event.data);
-                console.log('Parsed SSE Data:', sseData);
-
-                if (sseData.msg === 'estimation') {
-                    if (progressText) {
-                        if (sseData.rank_eta !== null && sseData.rank_eta !== undefined) {
-                            progressText.textContent = `In queue. Estimated time: ${sseData.rank_eta.toFixed(1)}s. Position: ${sseData.rank + 1}`;
-                        } else {
-                            progressText.textContent = `In queue. Position: ${sseData.rank + 1}`;
-                        }
-                    }
-                } else if (sseData.msg === 'process_starts') {
-                    if (progressText) progressText.textContent = 'Processing started...';
-                    if (progressBar) progressBar.value = 0; // Reset progress bar for this phase
-                } else if (sseData.msg === 'progress' && sseData.type === 'progress' && sseData.data) { // Gradio-style progress
-                    const progress = sseData.data.progress; // e.g., 0.0 to 1.0
-                    const currentStep = sseData.data.step;
-                    const totalSteps = sseData.data.total_steps;
-                    
-                    if (progressBar && progress !== undefined) {
-                        progressBar.value = progress * 100;
-                    }
-                    if (progressText) {
-                        if (currentStep !== undefined && totalSteps !== undefined) {
-                            progressText.textContent = `Step: ${currentStep} / ${totalSteps} (${(progress * 100).toFixed(0)}%)`;
-                        } else if (progress !== undefined) {
-                            progressText.textContent = `Progress: ${(progress * 100).toFixed(0)}%`;
-                        }
-                    }
-                    // Potentially a live image here in sseData.data.live_image, but Forge sends it differently
-
-                } else if (sseData.msg === 'process_generating' && sseData.output && sseData.output.data) {
-                    // This is what Forge actually sends for intermediate steps with image
-                    const progressValue = sseData.output.data.progress; // e.g., 0.0 to 1.0
-                    const liveImageBase64 = sseData.output.data.image; // Raw base64 string
-
-                    if (progressBar && progressValue !== undefined) progressBar.value = progressValue * 100;
-                    if (progressText && progressValue !== undefined) {
-                         progressText.textContent = `Generating: ${(progressValue * 100).toFixed(0)}%`;
-                    }
-                    
-                    if (progressImagePreview && liveImageBase64) {
-                        // Assuming live preview is raw base64 if different from final image object
-                        progressImagePreview.src = `data:image/jpeg;base64,${liveImageBase64}`; 
-                        progressImagePreview.style.display = 'block';
-                    }
-                } else if (sseData.msg === 'process_completed') {
-                    if (sseData.success && sseData.output && sseData.output.data && sseData.output.data[0] && sseData.output.data[0][0]) {
-                        // sseData.output.data[0] is an array of image objects
-                        // Each image object is like: { image: { path: "...", url: "..." }, caption: null }
-                        let finalImagesHTML = '';
-                        const imageObjectsArray = sseData.output.data[0];
-                        
-                        imageObjectsArray.forEach((imgObject, index) => {
-                            if (imgObject && imgObject.image && imgObject.image.url) {
-                                const imageUrl = imgObject.image.url;
-                                // Potentially proxy this URL through MobileSD if direct access is an issue for the client browser
-                                // For now, assume direct access is fine.
-                                finalImagesHTML += `<img src="${imageUrl}" alt="Generated Image ${index + 1}" style="max-width: 100%; margin-bottom: 10px;">`;
-                                console.log(`Displaying image from URL: ${imageUrl}`);
-                            } else {
-                                console.warn("Received image object without a valid image URL:", imgObject);
-                            }
-                        });
-
-                        if (outputImageContainer) {
-                            outputImageContainer.innerHTML = finalImagesHTML;
-                        }
-                        if (progressText) progressText.textContent = 'Generation Completed!';
-                        if (progressBar) progressBar.value = 100;
-                    } else {
-                        console.error('Process completed successfully but no valid image data structure found:', sseData.output);
-                        if (outputImageContainer) outputImageContainer.innerHTML = '<p style="color: orange;">Generation completed, but no image data was returned/found in the expected format.</p>';
-                        if (progressText) progressText.textContent = 'Completed (Image Data Format Error)';
-                    }
-                    
-                    if (progressImagePreview) progressImagePreview.style.display = 'none';
-                    if (currentEventSource) currentEventSource.close();
-                    currentEventSource = null;
-                    generateBtn.disabled = false;
-                    generateBtn.textContent = 'Generate Image';
-
-                } else if (sseData.msg === 'send_hash') {
-                    if (progressText) progressText.textContent = 'Request received by server, processing queued...';
-                } else if (sseData.msg === 'heartbeat') {
-                    // console.log('SSE Heartbeat received'); // Optional: log if needed for debugging, can be frequent
-                    // Do nothing specific for heartbeat, just acknowledge it to prevent "unhandled" logs
-                } else if (sseData.msg === 'close_stream') {
-                    console.log('SSE stream close message received from server.');
-                    if (progressText && progressText.textContent.includes('Connected') || progressText.textContent.includes('Receiving') || progressText.textContent.includes('Generating') ){
-                        // If we get close_stream and haven't reached completed state, it might be an abort or unexpected end.
-                        progressText.textContent = 'Stream closed by server.';
-                    }
-                    // Don't close currentEventSource here if process_completed hasn't been hit, 
-                    // as onerror might handle the actual close.
-                    // Re-enable button if it hasn't been by completion.
-                    if (!generateBtn.disabled && (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED)) {
-                        // If button enabled but source not closed (e.g. completed didn't run), this is unusual
-                    } else if (generateBtn.disabled && (!currentEventSource || currentEventSource.readyState === EventSource.CLOSED)) {
-                        // If button is still disabled and source is now closed (and not by completion logic)
-                        generateBtn.disabled = false;
-                        generateBtn.textContent = 'Generate Image';
-                    }
-                } else {
-                    console.log("Received unhandled SSE message structure or type:", sseData);
-                }
-
-            } catch (e) {
-                console.warn('Could not parse SSE data as JSON or error in handling:', event.data, e);
-                // Potentially a non-JSON message or a plain text progress update.
-                // For now, we assume JSON messages. If Forge sends plain text for some things,
-                // we might need to adjust parsing.
-                // if (progressText) progressText.textContent = event.data; // Display raw data if not JSON
-            }
-        };
-
-        currentEventSource.onerror = (error) => {
-            console.error('SSE connection error:', error);
-            if (progressText) progressText.textContent = 'Error with progress stream. Connection closed.';
-            if (outputImageContainer && !outputImageContainer.hasChildNodes()) { // Only show if no image was generated
-                outputImageContainer.innerHTML = '<p style="color: red;">Connection to server lost or an error occurred.</p>';
-            }
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Generate Image';
-            currentEventSource.close(); // Ensure it's closed
-            currentEventSource = null;
-        };
     }
 
     if (generateBtn) {

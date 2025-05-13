@@ -13,71 +13,105 @@
     *   The `Dockerfile` will be for this consolidated Node.js application, including copying and serving frontend assets.
     *   `docker-compose.yml` will define a single service (e.g., `mobilesd`), useful for managing environment variables, ports, and volumes.
 
-## II. Backend Updates (Node.js/Express) - Phase 1 Completed
+## II. Backend Updates (Node.js/Express) - Phase 1 Completed, Phase 2 In Progress
 
 1.  **Serving Frontend Assets:** (Setup done in app.js)
 2.  **Dynamic Server Configuration Management (Forge Instances):** (APIs Implemented)
 3.  **Local Resource Management & Model Access Strategy (Phased Approach):** (APIs for scanning master library Implemented)
 4.  **Civitai API Integration:** (APIs Implemented)
-5.  **Core Generation Endpoints (Using Dynamic Server Configs):** (APIs Implemented, generation successful with caveats)
-    *   **Refactor for Forge API (Queue-Based System) - Iteration 2 (Successful Generation):**
-        *   The image generation functionality in `routes/generation.js` has been significantly updated to integrate with Stable Diffusion Forge's queue-based API.
-        *   **`POST /api/v1/generate` (Initiating Generation):**
-            *   **Target Forge Endpoint:** Sends requests to the Forge server's `/queue/join`.
-            *   **Payload Structure (Major Update):**
-                *   `fn_index`: Now correctly set to `257` (identified from Forge UI HAR analysis for main txt2img).
-                *   `trigger_id`: Remains `16`.
-                *   `data`: Is now a **very large array (approx. 130+ elements)**, mirroring the structure sent by the Forge UI for `fn_index: 257`. MobileSD maps its UI parameters (prompts, W, H, CFG, steps, seed, sampler name, etc.) to specific indices in this array. Remaining elements use fixed defaults derived from a successful Forge UI generation.
-                *   A dynamic `task(...)` ID is generated for the first element.
-                *   **Checkpoint Handling:** The payload sends a fixed `"Use same checkpoint"` string. This means MobileSD currently relies on the checkpoint being pre-selected in the Forge UI itself. MobileSD's checkpoint dropdown is currently bypassed for this generation flow.
-                *   **Sampler Handling:** MobileSD UI now collects `sampler_name` (text input, e.g., "Euler") which is mapped to the appropriate sampler name index in the `data` array.
-                *   **LoRA Handling:** LoRAs are included in the positive prompt string (e.g., `prompt <lora:name:weight>`). Forge appears to process these successfully.
-            *   **Response to MobileSD Client:** Unchanged (responds immediately with `session_hash` and `server_alias`).
-        *   **`GET /api/v1/progress` (Progress and Results):**
-            *   **SSE Proxy & Parsing:** Still acts as an SSE proxy. Frontend (`public/js/app.js`) now has more detailed parsing for observed Forge messages:
-                *   `estimation`: Handles queue position and ETA (including `null` ETA).
-                *   `process_starts`: Updates UI text.
-                *   `heartbeat`: New message type from Forge, now silently acknowledged by frontend to avoid log spam.
-                *   `process_generating`: Handles step-by-step progress and can display live preview images if Forge sends them as base64 in `output.data.image`.
-                *   `process_completed`: This is now understood to return a complex `output.data` array.
-                    *   `output.data[0]`: Contains an array of image result objects.
-                    *   Each image result object: `{ image: { path: "...", url: "..." }, caption: null }`.
-                    *   **Crucially, Forge returns a URL to the image on its server, not direct base64 data.**
-            *   **Current Image Handling:**
-                *   **Frontend (`public/js/app.js`):** Updated to extract the `image.url` from the `process_completed` message and use this URL as the `src` for the `<img>` tag, allowing the browser to display the image directly from the Forge server. *Successfully displays the image in MobileSD UI.*
-                *   **Backend (MobileSD - `routes/generation.js`):** Image saving to `STABLE_DIFFUSION_SAVE_PATH` is **NOT YET IMPLEMENTED** for this new URL-based response. The image appears in Forge's output folder but is not yet downloaded and saved by MobileSD.
-        *   **Workflow Summary (Updated):**
-            1.  Client POSTs to `/api/v1/generate` with parameters (now including `sampler_name`).
-            2.  MobileSD backend (`routes/generation.js`):
-                *   Uses `fn_index: 257`.
-                *   Constructs the large `data` array, mapping UI inputs and using fixed defaults.
-                *   Queues job with Forge via `/queue/join` and returns `session_hash`.
-            3.  Client opens `EventSource` to `/api/v1/progress`.
-            4.  MobileSD backend (`/api/v1/progress`) proxies SSE events.
-            5.  Client (`public/js/app.js`) parses SSE:
-                *   Displays progress, queue status, heartbeats (silently).
-                *   On `process_completed`, extracts image URL(s) and displays image(s) by setting `<img> src` to these URLs.
-            6.  *(TODO: Backend `/api/v1/progress` needs to intercept `process_completed`, extract image URL(s), download the image(s) from Forge, and save them to `STABLE_DIFFUSION_SAVE_PATH`.)*
+5.  **Core Generation Endpoints (Refactoring for Phase 2):**
+    *   **Phase 1 Implementation (Now Deprecated but present in `routes/generation.js`):**
+        *   `POST /api/v1/generate` directly communicated with Forge's `/queue/join` using `fn_index: 257`.
+        *   It constructed the large payload array, mapping UI inputs.
+        *   **Checkpoint Handling (Phase 1):** Sent `"Use same checkpoint"`, relying on the checkpoint pre-selected in the Forge UI. This mechanism caused issues when the MobileSD UI tried to specify a different checkpoint.
+        *   Returned Forge's `session_hash` directly to the client.
+        *   `GET /api/v1/progress` acted as a direct SSE proxy for the client to monitor Forge.
+        *   Image saving logic in the backend (`/api/v1/progress`) was attempted but relied on the client staying connected and is superseded by the Phase 2 monitor.
+    *   **Phase 2 Goal (Currently Implementing):** Transition to the robust job queue system described in `II.bis`. The `routes/generation.js` file needs significant refactoring to align with this.
 
-## III. Frontend UI Updates (HTML, CSS, Vanilla JavaScript) - NEXT PHASE
+## II.bis. Core Backend: Persistent Job Queuing & Dispatcher System (CURRENT DEVELOPMENT FOCUS)
+
+*This phase focuses on making MobileSD a robust, browser-independent queuing system for managing multiple image generation jobs.*
+
+1.  **MobileSD Internal Job Queue (Persistence):**
+    *   **Storage:** Define and implement persistent storage (e.g., JSON file initially, potentially SQLite later).
+    *   **Job Schema:** Define the structure to store job details:
+        *   `mobilesd_job_id`: Unique ID generated by MobileSD.
+        *   `status`: (`pending`, `processing`, `completed`, `failed`, `cancelled`).
+        *   `creation_timestamp`, `completion_timestamp`.
+        *   `target_server_alias`: Alias of the Forge server to use.
+        *   `forge_session_hash`: Stored once the job is sent to Forge.
+        *   `generation_params`: Object containing all parameters needed for generation (prompts, dimensions, sampler, seed, LoRAs, **`checkpoint_name`**, etc.). The **`checkpoint_name`** MUST be the one selected in the MobileSD UI.
+        *   `result_details`: Saved image filenames, error messages.
+2.  **Job Submission Logic (`POST /api/v1/generate` Rework):**
+    *   **Current Task:** Modify this endpoint.
+    *   It **MUST** receive the generation request (including `checkpoint_name` from the UI).
+    *   It **MUST** create a job object based on the defined schema.
+    *   It **MUST** add the job to the persistent queue with `pending` status.
+    *   It **MUST** immediately respond to the client with the `mobilesd_job_id` (NOT the Forge `session_hash`).
+3.  **Backend Job Dispatcher Service:**
+    *   **Current Task:** Implement this service (e.g., as a background loop started in `app.js`).
+    *   **Job Selection:** Periodically query the persistent queue for `pending` jobs.
+    *   **Forge Submission:** For the next pending job:
+        *   Retrieve job details (including `target_server_alias` and all `generation_params`).
+        *   **Checkpoint Setting (Phase 2):** Send a preliminary request to the target Forge server's `/queue/join` using `fn_index: 8` (or equivalent identified function) to set the specific `checkpoint_name` from the job's `generation_params`. Generate a unique `session_hash` for this transaction.
+        *   **Generation Request (Phase 2):** If checkpoint setting is successful (or handled gracefully on error), send the main generation request to Forge's `/queue/join` using `fn_index: 257` (or equivalent). Construct the large `data` array using the job's `generation_params`. Crucially, the checkpoint parameter within *this* payload should now likely be `"Use same checkpoint"` as it was just set. Use the *same* `session_hash` generated for the checkpoint step.
+        *   Update the job in the queue: set `status` to `processing`, store the `forge_session_hash`.
+    *   **Concurrency Control:** Implement basic logic (e.g., one job per Forge server at a time).
+4.  **Backend Forge Job Monitoring Service (Per-Active-Job):**
+    *   **Current Task:** Implement this service (potentially triggered by the dispatcher when a job becomes `processing`).
+    *   For each job marked `processing`:
+        *   Maintain a dedicated backend SSE connection to Forge's `/queue/data?session_hash=...` using the job's stored `forge_session_hash`. This connection is **independent of any client UI**.
+        *   Parse SSE messages (`estimation`, `process_starts`, `process_generating`, `heartbeat`, `process_completed`). Update job status/progress details in the persistent queue if needed for UI display later.
+        *   **Image Handling on `process_completed`:**
+            *   Extract image URL(s) from the Forge SSE message.
+            *   Download the image(s) from the Forge server URL.
+            *   Save the image(s) to `STABLE_DIFFUSION_SAVE_PATH`.
+            *   Update the job in the queue: set `status` to `completed`, store saved `result_details` (filenames), `completion_timestamp`.
+        *   **Error Handling:** Update job `status` to `failed`, store `result_details` (error message).
+        *   Close the SSE connection once the job is terminal (`completed` or `failed`).
+5.  **Robustness Considerations for Dispatcher/Monitor:** (As previously defined, implement as part of Phase 2)
+    *   Handling Forge server unavailability, timeouts, retries, restart persistence.
+
+## III. Frontend UI Updates (HTML, CSS, Vanilla JavaScript) - Phase 3 (Dependent on Backend Phase 2)
 
 1.  **General:** All frontend assets served by the Node.js/Express application from the `public/` directory.
 2.  **Main Generation Page:**
     *   Server Selection Dropdown *(Implemented)*.
     *   Input Fields (Prompts, Seed, Width, Height, Steps, CFG, **Sampler Name**). *(Updated: Sampler Index changed to Sampler Name text input, default "Euler"). New Forge-specific inputs added (style preset, etc. with HAR defaults).*
     *   LoRA Selection *(Implemented, LoRAs included in prompt string)*.
-    *   Checkpoint Selection *(Implemented, but currently bypassed by Forge API payload which uses "Use same checkpoint". User must pre-select in Forge UI).*
-    *   "Generate Image" Button (calls `POST /api/v1/generate`). *(Implemented).*
-    *   Progress Display (SSE via `GET /api/v1/progress`). *(Implemented: Handles estimation, start, generating, completion, heartbeat. Displays progress text and bar).*
-    *   Image Display Area. *(Implemented: Displays image from URL provided by Forge in `process_completed` SSE message).*
-3.  **Server Setup Page/Tab:**
-    *   UI for CRUD operations on server configurations (call `/api/v1/servers` endpoints). *(Implemented: Full CRUD functionality with UI for adding, listing, editing, and deleting server configurations. Includes tab navigation).*
-4.  **Civitai Integration UI:**
-    *   Input for Civitai Image ID & "Fetch" button (call `POST /api/v1/civitai/image-info`).
-    *   Populate form fields from response.
-    *   Display non-local resources with "Download" button (call `POST /api/v1/civitai/download-model`).
-    *   Provide download feedback.
-5.  **Overall UI/UX:**
+    *   Checkpoint Selection: *(Frontend sends `checkpoint_name` correctly, but backend needs Phase 2 implementation to use it).*
+    *   "Generate Image" Button: **Needs update** to become "Add to Queue". It calls `POST /api/v1/generate`.
+    *   Progress Display: **Needs significant update.** Instead of directly connecting to `/api/v1/progress` with a Forge `session_hash`, the UI will need to:
+        *   Receive the `mobilesd_job_id` from the `POST /api/v1/generate` response.
+        *   Periodically poll a new backend endpoint (e.g., `GET /api/v1/queue/jobs/:mobilesd_job_id/status`) to get the current status (`pending`, `processing`, `completed`, `failed`) and progress details stored by the backend monitor. SSE from the backend *to* the frontend for real-time updates is a possible enhancement but polling is simpler initially.
+        *   On `completed` status, retrieve image details (e.g., filenames or paths) to display results (likely fetched via the Gallery API).
+3.  **Server Setup Page/Tab:** *(Implemented)*
+4.  **Civitai Integration UI:** *(Existing, can be enhanced later)*
+5.  **NEW: Queue Tab (MobileSD UI):** (Implementation part of Phase 3)
+    *   **View:** Displays jobs from MobileSD's internal queue (pending, processing, completed, failed).
+        *   Show Job ID, key parameters, status, timestamps.
+        *   For `processing_on_forge` jobs, could show basic progress if the backend Job Monitor exposes this.
+    *   **Actions:**
+        *   Reorder pending jobs.
+        *   Cancel/delete pending or processing jobs (would require backend to attempt to stop Forge job if possible, or just mark as cancelled in MobileSD queue).
+        *   Clear/remove completed/failed jobs from view.
+    *   **Backend API:** Requires new endpoints like:
+        *   `GET /api/v1/queue/jobs` (list jobs, with filtering options for status).
+        *   `POST /api/v1/queue/jobs/:job_id/cancel`
+        *   `DELETE /api/v1/queue/jobs/:job_id` (to remove from list)
+6.  **NEW: Gallery Tab (MobileSD UI):** (Implementation part of Phase 3)
+    *   **View:** Displays images successfully downloaded and saved by MobileSD to `STABLE_DIFFUSION_SAVE_PATH`.
+        *   Show thumbnails, allow clicking to view larger image.
+        *   Display basic metadata if saved alongside (e.g., prompt, seed - could be part of filename or a companion .json).
+    *   **Actions:**
+        *   Sort/filter images.
+        *   Delete images (with confirmation, deletes from `STABLE_DIFFUSION_SAVE_PATH`).
+    *   **Backend API:** Requires new endpoints like:
+        *   `GET /api/v1/gallery/images` (list image files and potentially metadata).
+        *   `DELETE /api/v1/gallery/images/:filename`.
+        *   A way to serve the actual image files (e.g., if save path is not directly under `public`, a route like `GET /gallery_files/:filename`).
+7.  **Overall UI/UX:**
     *   Clear feedback/error messaging.
     *   Responsive design.
 
@@ -97,43 +131,177 @@
 
 ## VI. Overall Development Workflow (Phased Approach)
 
-1.  **Phase 1: Core MobileSD Application (Assuming Simpler Model Access) - COMPLETED**
+1.  **Phase 1: Core MobileSD Application & Direct Forge Interaction - COMPLETED**
     *   **Core Backend & Docker Setup:** Initialize Node.js, Express, static file serving (`public/index.html`), `Dockerfile`, `docker-compose.yml`. *(Done)*
     *   **Dynamic Server Config:** Implement `/api/v1/servers` CRUD APIs. *(Done)*
-    *   **Core Generation Logic:** Implement `/api/v1/generate` and `/api/v1/progress`. *(Iteration 2: Successfully generates images with Forge using fn_index 257 and large data array; image displayed in UI via URL. Backend saving pending).*
+    *   **Direct Forge Generation Logic:** Implement `/api/v1/generate` and `/api/v1/progress` that directly interact with Forge for a single job, with client-side SSE handling. *(Iteration 2: Successfully generates images with Forge using fn_index 257 and large data array; image displayed in UI via URL. Backend saving logic for this direct flow is the immediate next micro-step to test).*
     *   **Local Resource Listing:** Implement `/api/v1/loras` and `/api/v1/checkpoints`. *(Done)*
     *   **Civitai Integration (Download to Unraid):** Implement `/api/v1/civitai/image-info` and `/api/v1/civitai/download-model`. *(Done)*
-    *   **Basic Frontend Placeholder:** Setup `public/index.html` and static serving. *(Done)*
-2.  **Phase 2: On-Demand Model Sync & Advanced Features (Future)**
-    *   (Details as before: Lightweight API Script, MobileSD Backend/Frontend Updates for Sync)
-3.  **Phase 3: UI Refinement & Full Frontend Implementation - CURRENT FOCUS**
-    *   Dedicated Server Setup Page/Tab UI. *(Completed: Full CRUD UI for server configurations, including tab navigation).*
-    *   Refine main generation page UI, progress display, image display.
-        *   Server selection dropdown. *(Completed)*
-        *   Checkpoint selection dropdown, including recursive scan and subfolder display. *(Completed)*
-        *   LoRA selection UI with dynamic rows, recursive scan, and subfolder display. *(Completed)*
-        *   Implement Civitai Helper UI (fetch info, download). *(Pending)*
-        *   Implement core generation logic (send request, poll progress, display results). *(Pending)*
-    *   Ensure UI is responsive. *(Ongoing)*
-    *   *Note: This phase number was shifted; it now represents the full frontend development based on completed Phase 1 backend.*
-4.  **Phase 4: Testing, Optimization, and Documentation (Ongoing & Final)**
-    *   (Details as before)
-5.  **Phase 5 (Future): Cache Management & Extension Exploration**
-    *   (Details as before)
+    *   **Basic Frontend Structure:** Setup `public/index.html` and static serving. *(Done)*
+    *   *Note: The direct Forge interaction logic in `routes/generation.js` is now considered legacy and needs replacement by Phase 2 components.*
 
-## VII. Immediate Steps (Current Focus - Phase 3 Frontend & Backend Image Handling)
+2.  **Phase 2: Backend - Persistent Job Queuing & Dispatcher System (CURRENTLY IN PROGRESS)**
+    *   **Define & Implement Job Queue Persistence:** (Choose method: JSON/SQLite). *(Task: Implement)*
+    *   **Refactor `POST /api/v1/generate`:** Adapt to add jobs to the internal queue and return `mobilesd_job_id`. *(Task: Implement)*
+    *   **Develop Backend Job Dispatcher:** Implement service to pick pending jobs and submit them to Forge, including correct checkpoint handling. *(Task: Implement)*
+    *   **Develop Backend Forge Job Monitor:** Implement service to track Forge jobs via backend SSE, download/save images, update job status. *(Task: Implement)*
+    *   **Implement Backend APIs for Queue Management:** Create `GET /api/v1/queue/jobs`, `GET /api/v1/queue/jobs/:job_id/status`, etc. *(Task: Implement)*
+    *   **Implement Backend APIs for Gallery:** Create `GET /api/v1/gallery/images`, image serving, etc. *(Task: Implement)*
 
-1.  **Implement Backend Image Downloading and Saving:** *(New Top Priority)*
-    *   In `/api/v1/progress` (`routes/generation.js`), when a `process_completed` SSE message is parsed:
-        *   Extract the `image.url`(s) from `jsonData.output.data[0]$.
-        *   For each URL, MobileSD backend uses `axios` (or similar) to make a GET request to download the image bytes from the Forge server.
-        *   Save the downloaded image buffer to `process.env.STABLE_DIFFUSION_SAVE_PATH` with a unique filename.
-        *   Log success/failure of download & save.
-        *   Consider if/how to signal the saved filename/path back to the client (e.g., as part of a custom SSE message MobileSD sends, or client assumes save based on successful display).
-2.  **Update `docs/PLAN.md` to reflect current status and next steps.** (This task)
-3.  **User to handle GitHub synchronization.**
-4.  **User to finalize configuration in `deploy-mobilesd-to-unraid.sh`.** (Done, pending verification by user).
-5.  **Begin implementation of Phase 3 (Frontend UI Development):**
+3.  **Phase 3: Frontend - Queue Management & Gallery UI (NEXT MAJOR PHASE - Blocked by Phase 2)**
+    *   Develop the "Queue Tab" UI.
+    *   Develop the "Gallery Tab" UI.
+    *   Adapt the main "Generator" page UI (button text, progress display mechanism).
+    *   Refine overall UI/UX.
+
+4.  **Phase 4: On-Demand Model Sync & Advanced Features (Future)**
+    *   (Previously Phase 2 - details as before: Lightweight API Script, etc.)
+
+5.  **Phase 5: Testing, Optimization, and Documentation (Ongoing & Final)**
+    *   (Previously Phase 4)
+
+6.  **Phase 6 (Future): Cache Management & Extension Exploration**
+    *   (Previously Phase 5)
+
+## VII. Immediate Steps (Revised - Focusing on Phase 2 Implementation)
+
+1.  **Finalize Job Schema & Persistence:** Decide on JSON vs. SQLite for the job queue and implement the basic storage functions (add job, get job by ID, update job, find pending jobs).
+2.  **Refactor `POST /api/v1/generate`:** Modify this route to create a job object from `req.body` (including `checkpoint_name`), save it to the persistent queue, and return the new `mobilesd_job_id`.
+3.  **Implement Backend Dispatcher:** Create the service loop that finds pending jobs and attempts to send them to Forge, including the two-step process (set checkpoint `fn_index: 8`, then generate `fn_index: 257`) using a consistent `session_hash`. Update the job status and store the `forge_session_hash`.
+4.  **Implement Backend Monitor:** Create the service that monitors active Forge jobs (using the stored `forge_session_hash`) via backend SSE, handles `process_completed` (downloads/saves images), updates the job status to `completed` or `failed` in the persistent queue.
+5.  **Implement Basic Queue/Status API:** Create `GET /api/v1/queue/jobs/:mobilesd_job_id/status` for the frontend to poll.
+6.  **Testing:** Thoroughly test the backend queue -> dispatcher -> Forge -> monitor -> save workflow.
+7.  **(Defer Frontend Changes):** Delay major frontend changes (Queue Tab, Gallery Tab, Generator Page polling) until the backend Phase 2 is functional.
+8.  **Update `docs/PLAN.md`:** *(This step is complete)*.
+9.  **User to handle GitHub synchronization.**
+10. **User to finalize configuration in `deploy-mobilesd-to-unraid.sh`.** (Done, pending verification by user).
+11. **Begin implementation of Phase 3 (Frontend UI Development):**
     *   Structure `public/index.html` for the main generation page.
     *   Set up basic `public/css/style.css`.
-    *   Start `public/js/app.js` to fetch initial data (servers, models) from the backend API and populate UI elements. 
+    *   Start `public/js/app.js` to fetch initial data (servers, models) from the backend API and populate UI elements.
+
+## MobileSD Development Plan
+
+**Overall Goal:** Create a simple mobile-friendly web UI to interact with a remote Stable Diffusion Forge server, focusing initially on text-to-image generation.
+
+---
+
+### Phase 1: Server Setup UI (Completed)
+
+*   **Goal:** Allow users to configure connection details for one or more Forge servers.
+*   **Status:** **Completed**
+*   **Details:**
+    *   Frontend page (`Server Setup` view) with form for Alias, API URL, Auth.
+    *   Backend API endpoints (`/api/v1/servers`) for CRUD operations on server configs.
+    *   Server configurations stored in `data/servers.json`.
+    *   Functionality: Add, List, Edit (including alias change), Delete servers.
+    *   Helper functions in `utils/configHelpers.js`.
+    *   Server list populates dropdown on Generator page.
+
+---
+
+### Phase 2: Generator Page - Resource Loading (Completed)
+
+*   **Goal:** Load available Checkpoints and LoRAs from the Forge server into the UI.
+*   **Status:** **Completed**
+*   **Details:**
+    *   Backend API endpoints (`/api/v1/checkpoints`, `/api/v1/loras`) using recursive `scanModelDirectory` from `utils/configHelpers.js`.
+    *   Endpoints return `filename` and `relativePath`.
+    *   Frontend (`public/js/app.js`) fetches and populates Checkpoint dropdown (displaying `relativePath/filename`).
+    *   Frontend (`public/js/app.js`) fetches LoRAs, implements dynamic adding/removing of LoRA rows with dropdowns and weight inputs.
+
+---
+
+### Phase 3: Documentation & Git Sync (Completed)
+
+*   **Goal:** Update documentation and sync with Git repository.
+*   **Status:** **Completed**
+*   **Details:**
+    *   Updated `docs/PLAN.md` and `docs/FILES.MD`.
+    *   Performed `git add .`, `git commit`, `git push`.
+
+---
+
+### Phase 4: Generator Page - Main Action (Partially Completed)
+
+*   **Goal:** Implement the "Generate Image" button click, send parameters to the backend, have the backend interact with the Forge server to generate the image using the selected parameters (including checkpoint and LoRAs), and update the job status.
+*   **Status:** **Partially Completed**
+*   **Details:**
+    *   Frontend (`public/js/app.js`):
+        *   Gathers input parameters (prompts, dimensions, steps, CFG, seed, LoRAs, etc.) and selected server/checkpoint.
+        *   Constructs request body: `{ target_server_alias: "...", generation_params: { ... } }`.
+        *   Sends request to `POST /api/v1/generate`.
+    *   Backend (`routes/generation.js`):
+        *   `POST /api/v1/generate` receives request.
+        *   Correctly extracts `target_server_alias` and the nested `generation_params` object.
+        *   Creates a job object with a unique ID and status 'pending'.
+        *   Stores the *flat* `generation_params` object within the job.
+        *   Adds job to the queue using `utils/jobQueueHelpers.js`.
+        *   Responds `202 Accepted` with `{ mobilesd_job_id: "..." }`.
+    *   Backend (`services/dispatcher.js`):
+        *   Periodically checks queue for pending jobs.
+        *   For a pending job:
+            *   Retrieves server config (URL, auth).
+            *   **Checkpoint Verification:** If `checkpoint_name` is specified, calls `verifyCheckpointExists` helper.
+                *   `verifyCheckpointExists` calls Forge API `GET /sdapi/v1/sd-models`.
+                *   Compares requested checkpoint name (normalizing slashes `/` vs `\`) against Forge's reported model titles.
+                *   Returns the *exact matching title string* (e.g., `Pony\cyberrealisticPony_v8.safetensors [hash]`) if found, otherwise `null`.
+                *   If verification fails (returns `null`), job is marked 'failed' and generation is skipped.
+            *   **Payload Construction:**
+                *   Converts `seed` and `subseed` (from `job.generation_params`) to integer `-1` if empty or non-numeric.
+                *   Constructs payload for `POST /sdapi/v1/txt2img`.
+                *   If checkpoint verification passed, adds `override_settings: { sd_model_checkpoint: "EXACT_FORGE_TITLE_STRING" }`.
+                *   Currently sets `send_images: false`, `save_images: true` (telling Forge to save locally).
+            *   **API Call:** Sends synchronous request to Forge `/sdapi/v1/txt2img`.
+            *   **Response Handling:** Processes success/error response from Forge.
+            *   Updates job status (`completed` or `failed`) and `result_details` (currently includes Forge response info) in the queue using `utils/jobQueueHelpers.js`.
+    *   Backend (`utils/jobQueueHelpers.js`):
+        *   Added `getJobById` function.
+*   **Current State:** Successfully generates image using the selected checkpoint by overriding the model via the API. Image is currently saved on the Forge server itself, not sent back to MobileSD. Frontend does not yet poll for status or display results.
+
+---
+
+### Phase 5: Generator Page - Progress & Output Handling (Not Started)
+
+*   **Goal:** Implement frontend polling for job status, display progress (basic status first), and show the final generated image(s) in the UI.
+*   **Status:** **Not Started**
+*   **Tasks:**
+    *   **Frontend Polling:** Modify `public/js/app.js` (`handleGenerateImageClick` success path) to periodically call `GET /api/v1/queue/jobs/:jobId/status` after submitting a job.
+    *   **Status Display:** Update UI elements (e.g., `progressText`) based on the `status` field received from the polling endpoint (`pending`, `processing`, `completed`, `failed`). Show error details if status is `failed`.
+    *   **Image Display:** Modify `public/js/app.js` to retrieve the saved image filenames from the `result_details` in the job status response (once polling and server-side saving are implemented) and construct URLs to display the images in the `outputImageContainer`.
+    *   **(Future):** Investigate more detailed progress (percentage, live preview) possibly by reverting to Forge's async queue/SSE approach if the synchronous method proves too limiting for UX.
+
+---
+
+### Phase VI: Next Features / Refinements (Planned)
+
+*   LoRA Handling in Prompt (Currently appends, consider refining based on Forge capabilities).
+*   Error Handling & User Feedback (More robust messages, UI indicators).
+*   Civitai Integration (Browse/download models/LoRAs).
+*   Forge Model Download Trigger (If `verifyCheckpointExists` fails, offer to download).
+*   Image Browser/History Page.
+*   Refactor/Code Cleanup.
+*   More Generation Parameters (UI and backend support).
+*   User Authentication for MobileSD UI itself.
+
+---
+
+### VII. Immediate Steps
+
+1.  **Modify Dispatcher for Image Saving:**
+    *   **File:** `services/dispatcher.js`
+    *   **Action:** Change payload to `send_images: true`, `save_images: false`.
+    *   **Action:** In the success handler after the `axios.post` to `/sdapi/v1/txt2img`, process the `response.data.images` array (contains base64 image strings).
+    *   **Action:** For each base64 string, use the existing `saveImageData` helper function to decode and save the image to the MobileSD server's configured output path (`STABLE_DIFFUSION_SAVE_PATH`).
+    *   **Action:** Modify the `updateJobInQueue` call for completed jobs to store the *filenames* of the saved images in `result_details` (e.g., `{ images: ["filename1.png", "filename2.png"], info: { ...parsedInfo... } }`).
+2.  **Frontend Polling & Status:**
+    *   **File:** `public/js/app.js`
+    *   **Action:** In `handleGenerateImageClick`, after receiving the `202 Accepted` response with the `mobilesd_job_id`, start a `setInterval` to call `GET /api/v1/queue/jobs/:jobId/status`.
+    *   **Action:** Update the `progressText` element based on the `status` returned by the poll.
+    *   **Action:** Stop the interval when the status is `completed` or `failed`.
+    *   **Action:** Display error details from `result_details.error` if status is `failed`.
+    *   **Action:** Re-enable the Generate button only after the job is fully completed or failed.
+3.  **Frontend Image Display:**
+    *   **File:** `public/js/app.js`
+    *   **Action:** When the polling status indicates `completed`, retrieve the image filenames from `result_details.images`.
+    *   **Action:** Construct image URLs (e.g., `/outputs/[filename]`, assuming Express serves the output directory) and create `<img>` elements within `outputImageContainer` to display them. 

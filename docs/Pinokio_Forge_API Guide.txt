@@ -1,0 +1,249 @@
+﻿Programmatic Interaction with Forge Stable Diffusion via Pinokio: API Guide (Revised)
+1. Introduction
+This document provides guidance on sending programmatic requests to Stable Diffusion Forge when it is installed and managed through the Pinokio browser. It focuses on the methods for interacting with Forge's Application Programming Interfaces (APIs), assuming that API access has already been established.
+Forge, an enhanced version of the AUTOMATIC1111 Stable Diffusion WebUI, typically exposes its core functionalities via a FastAPI-based REST API, even when run within Pinokio.2 While its user interface is built with Gradio, the primary mechanism for automation and integration involves these underlying API endpoints.4
+The following sections detail the relationship between Forge, Pinokio, and the relevant APIs, methods for dispatching requests, an examination of key API endpoints, and troubleshooting advice relevant to programmatic interaction.
+2. Understanding the Landscape: Forge, Pinokio, and APIs
+To effectively interact with Forge Stable Diffusion running under Pinokio, it's useful to understand the roles of each component and the nature of the APIs involved.
+* Forge Stable Diffusion: Forge builds upon the AUTOMATIC1111 Stable Diffusion WebUI, aiming for optimized resource management, faster inference, and additional features.1 It inherits the WebUI's backend API structure, which is crucial for programmatic control, and uses the Gradio library for its user interface.2
+* Pinokio: Pinokio simplifies the installation, execution, and management of applications like Forge, providing isolated environments.6 It acts as a launcher and manager, handling dependencies and configurations.7 Pinokio manages how Forge is run but doesn't inherently change Forge's core API capabilities.6 Applications are typically installed into a pinokio/api directory.7
+* API Types:
+   * Stable Diffusion WebUI API (FastAPI-based): The core programmatic interface for AUTOMATIC1111 and Forge. It consists of RESTful API endpoints, often prefixed with /sdapi/v1/ (e.g., /sdapi/v1/txt2img, /sdapi/v1/img2img), built using FastAPI.9 This is the primary, well-documented API for automation tasks like image generation.
+   * Gradio API: Gradio, the UI library, also allows programmatic interaction with Gradio apps, often via the gradio_client library or direct API calls if endpoints are explicitly named.4 While Forge's UI is Gradio-based, the FastAPI endpoints provide more direct and comprehensive control over the core Stable Diffusion functionalities.
+For robust programmatic control over core features, interacting with the FastAPI-based WebUI API (/sdapi/v1/...) is the standard approach. If you are already successfully sending requests and receiving generated images programmatically, it confirms that the necessary API is active and accessible.
+3. Methods for Sending API Requests to Forge
+Assuming the API is active on your Forge instance running via Pinokio, you can use several methods to send requests. Direct HTTP requests are the most common for the standard /sdapi/v1/... endpoints.
+3.1. Method 1: Direct HTTP Requests (e.g., using Python's requests library)
+This involves constructing and sending HTTP POST or GET requests directly to the exposed API endpoints. It offers fine-grained control and is well-suited for the FastAPI-based /sdapi/v1/... routes.
+* Prerequisites: An HTTP request library (e.g., requests for Python: pip install requests).
+* Identifying the Forge URL: Typically http://127.0.0.1:7860 if running locally on the default port.11 If Forge is configured to listen on the network (e.g., potentially via a --listen argument set during setup) and accessed from another machine, use the local IP address of the machine running Pinokio (e.g., http://192.168.1.X:7860).12
+* Finding API Endpoints and Payloads: Access the interactive API documentation provided by FastAPI at the /docs endpoint of your running Forge instance (e.g., http://127.0.0.1:7860/docs). This is the definitive source for available endpoints, methods, and payload structures for your specific setup.9
+* Example: Sending a txt2img request using Python requests:
+Python
+import requests
+import json
+import base64
+import io
+from PIL import Image
+
+# URL of your Forge instance's API
+forge_url = "http://127.0.0.1:7860" # Adjust if using a different IP/port
+
+# Payload for the txt2img endpoint
+# Refer to http://<your_forge_ip>:<port>/docs for all parameters
+payload = {
+   "prompt": "a high-resolution photo of a robot reading a book",
+   "negative_prompt": "low quality, blurry, illustration, drawing",
+   "steps": 30,
+   "width": 1024,
+   "height": 1024,
+   "sampler_name": "DPM++ 2M Karras", # Check /sdapi/v1/samplers for available samplers
+   "cfg_scale": 7,
+   "seed": -1 # Use -1 for a random seed
+   # Add other parameters like "sd_model_checkpoint" via "override_settings" if needed
+   # "override_settings": {
+   #     "sd_model_checkpoint": "your_model_name.safetensors"
+   # }
+}
+
+try:
+   # Send the POST request
+   response = requests.post(url=f'{forge_url}/sdapi/v1/txt2img', json=payload, timeout=300) # Added timeout
+   response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+
+   r = response.json()
+
+   # Process the response (images are usually base64 encoded)
+   if 'images' in r:
+       for i, img_str in enumerate(r['images']):
+           try:
+               # Handle potential "data:image/png;base64," prefix if present
+               if "," in img_str:
+                   base64_data = img_str.split(",", 1)[1]
+               else:
+                   base64_data = img_str
+
+               image_data = base64.b64decode(base64_data)
+               image = Image.open(io.BytesIO(image_data))
+               filename = f'output_image_{i}.png'
+               image.save(filename)
+               print(f"Saved {filename}")
+           except Exception as e:
+               print(f"Error decoding/saving image {i}: {e}")
+   else:
+       print("No images found in response.")
+
+   # Print generation info if available
+   if 'info' in r:
+       try:
+           info_data = json.loads(r['info'])
+           print(f"Generation Info: {json.dumps(info_data, indent=2)}")
+       except json.JSONDecodeError:
+            print(f"Generation Info (raw): {r['info']}")
+
+
+except requests.exceptions.Timeout:
+   print("Request timed out.")
+except requests.exceptions.RequestException as e:
+   print(f"HTTP Request failed: {e}")
+   if e.response is not None:
+       print(f"Status Code: {e.response.status_code}")
+       print(f"Response Content: {e.response.text}")
+except Exception as e:
+   print(f"An error occurred: {e}")
+
+
+3.2. Method 2: Using the gradio_client Python Library
+The gradio_client library interacts programmatically with Gradio applications.4 It's most useful for endpoints explicitly exposed using Gradio's api_name mechanism within the application's code.4
+   * Installation: pip install gradio_client.4
+   * Connecting: client = Client("http://127.0.0.1:7860/") (or your Forge URL).4
+   * Finding Endpoint Names: Check the "Use via API" link in the Gradio UI footer, which lists named endpoints if defined.4
+   * Usage: Use client.predict(api_name="/endpoint_name", arg1, arg2,...).4
+While gradio_client can potentially call the FastAPI endpoints, direct HTTP requests (Method 1) are generally more straightforward, better documented, and standard for interacting with the /sdapi/v1/... routes.9 Use Method 1 for core functions like txt2img and img2img. Consider gradio_client if you need to interact with custom UI elements or extensions that specifically expose functionality via Gradio's named API endpoints.4
+4. Deep Dive: Key API Endpoints and Parameters (Focus on txt2img)
+The Stable Diffusion WebUI API, inherited by Forge, offers numerous endpoints. The /docs path on your running Forge instance (e.g., http://127.0.0.1:7860/docs) provides the definitive, interactive Swagger UI documentation for your specific installation.9
+4.1. /sdapi/v1/txt2img - Text-to-Image Generation
+Generates images from textual descriptions.
+   * Method: POST
+   * Payload: JSON object containing generation parameters.9
+   * Response: JSON object, typically including a list of base64 encoded images (images) and generation metadata (info).9
+Table: Essential txt2img Parameters 9
+Parameter Name
+	Data Type
+	Description
+	Example Value
+	prompt
+	string
+	Required. The main positive prompt describing the desired image.
+	"A majestic dragon soaring"
+	negative_prompt
+	string
+	Text describing elements to avoid.
+	"blurry, low quality, watermark"
+	styles
+	array of strings
+	List of predefined style names to apply.
+	["cinematic lighting"]
+	seed
+	integer
+	RNG seed. -1 for random. Consistent seeds aid reproducibility.
+	12345
+	subseed
+	integer
+	Secondary seed. -1 for random.
+	-1
+	subseed_strength
+	float
+	Influence of subseed (0 to 1).
+	0.0
+	steps
+	integer
+	Number of diffusion sampling steps. More steps generally increase detail but also generation time.
+	30
+	sampler_name
+	string
+	Sampling algorithm (e.g., "Euler a", "DPM++ 2M Karras"). List via /sdapi/v1/samplers.
+	"DPM++ 2M Karras"
+	width
+	integer
+	Width of the generated image in pixels.
+	1024
+	height
+	integer
+	Height of the generated image in pixels.
+	1024
+	cfg_scale
+	float
+	Classifier-Free Guidance scale. Controls prompt adherence.
+	7.0
+	batch_size
+	integer
+	Number of images per batch.
+	1
+	n_iter
+	integer
+	Number of sequential batches. Total images = batch_size * n_iter.
+	1
+	restore_faces
+	boolean
+	Apply face restoration model if available.
+	false
+	tiling
+	boolean
+	Generate a seamlessly tileable image.
+	false
+	override_settings
+	object
+	JSON object to temporarily override global WebUI settings (e.g., sd_model_checkpoint).
+	{"sd_model_checkpoint": "model.ckpt"}
+	script_name
+	string
+	Name of an installed script to execute.
+	null
+	script_args
+	array
+	Arguments for the specified script.
+	``
+	send_images
+	boolean
+	If true (default), return images in the response.
+	true
+	save_images
+	boolean
+	If true (default), save images to disk per WebUI settings.
+	true
+	The override_settings parameter is powerful for dynamically changing models or other settings per request without altering the global Forge configuration.9
+4.2. /sdapi/v1/img2img - Image-to-Image Generation
+Generates images based on an initial input image and a prompt.
+   * Method: POST
+   * Key Additional Parameters: init_images (array of base64 strings), denoising_strength (float, 0-1), mask (base64 string for inpainting), inpainting_fill (integer mode).
+4.3. Other Useful Endpoints (Brief Overview) 9
+   * /sdapi/v1/options (GET/POST): Read/modify WebUI settings.
+   * /sdapi/v1/sd-models (GET): List available SD checkpoint models.
+   * /sdapi/v1/samplers (GET): List available samplers.
+   * /sdapi/v1/upscalers (GET): List available upscalers.
+   * /sdapi/v1/loras (GET): List available LoRA models.
+   * /sdapi/v1/embeddings (GET): List available textual inversion embeddings.
+   * /sdapi/v1/progress (GET): Get progress of the current task.
+   * /sdapi/v1/interrupt (POST): Attempt to interrupt the current task.
+   * /sdapi/v1/skip (POST): Attempt to skip the current task.
+Consult the /docs endpoint on your Forge instance for the most accurate and complete API specification.9 Forge status reports indicate API endpoints like txt2img are generally functional.10
+5. Troubleshooting and Best Practices
+If you encounter issues sending requests:
+   * Confirm API Availability: If your API requests (like the Python example above) are successfully generating images, the API is active and reachable. No further verification of activation is needed.
+   * Network Configuration:
+   * Remote Access: If accessing the API from a different machine, Forge needs to be listening on the network IP (e.g., 0.0.0.0 or a specific IP like 192.168.x.x) rather than just 127.0.0.1 (localhost). This is often configured via a --listen command-line argument, which might have been set by default or during the Pinokio setup process.12 If connections fail from remote machines but work locally, this is a likely cause.
+   * Firewall: Ensure the port Forge uses (default 7860 11) isn't blocked by firewalls on the host machine or network.
+   * IP Address and Port: Verify the exact IP address and port in your client script match the running Forge instance.12
+   * Authentication:
+   * If Forge was configured with authentication (e.g., via --gradio-auth username:password 12), API requests must include appropriate authentication headers (e.g., HTTP Basic Auth). Failure results in a 401 Unauthorized error. The requests library supports this via the auth parameter: requests.post(..., auth=('user', 'pass')).
+   * Error Handling in Client Scripts:
+   * Check HTTP Status Codes: 200 OK indicates success. 4xx errors (e.g., 400, 404, 422) signify client-side issues (bad request format, invalid parameters). 5xx errors indicate server-side problems within Forge.
+   * Examine Response Body: Error responses often contain a JSON body with a detail field explaining the issue. Log this for debugging.
+   * Implement Timeouts: Image generation can be slow; set appropriate timeouts in your HTTP client (e.g., timeout=300 for 5 minutes in requests).
+   * Pinokio Specifics:
+   * Ensure Forge is Running: Verify that the Forge application is actively running within the Pinokio interface.8
+   * Resource Availability: Ensure sufficient CPU, RAM, and especially GPU VRAM are available on the host machine. Other processes (managed by Pinokio or otherwise) could cause resource contention.6
+   * Model and File Management:
+   * Ensure models (checkpoints, LoRAs, VAEs), embeddings, and other necessary files referenced in API calls exist in the correct directories expected by Forge within its Pinokio installation path (often under pinokio/api/<forge_app_name>/models/, etc.).8 Incorrect paths or missing files will cause errors.
+   * Rate Limiting (Local):
+   * While there's no enforced rate limit, sending too many requests too quickly can overload the local hardware. Implement delays or a queue if making numerous requests programmatically.
+Troubleshooting involves checking basic connectivity, authentication, request structure, parameters, and resource availability. The Forge console output within Pinokio can provide valuable clues.
+6. Conclusion
+Programmatic interaction with Stable Diffusion Forge running under Pinokio is achieved primarily through the standard FastAPI-based API inherited from the AUTOMATIC1111 WebUI.9 If you can successfully send requests and receive generated images, the API is confirmed to be active.
+Direct HTTP requests to endpoints like /sdapi/v1/txt2img and /sdapi/v1/img2img offer the most direct and documented method for automation.9 The interactive documentation available at the /docs endpoint of your running Forge instance is the essential reference for discovering all available endpoints, parameters, and their structures.
+Leveraging this API allows for the integration of Forge's image generation capabilities into diverse workflows, custom applications, and batch processing systems, enabling automation beyond the manual web interface.
+Works cited
+   1. Haoming02/sd-webui-forge-classic: The "classic" version of ... - GitHub, accessed May 12, 2025, https://github.com/Haoming02/sd-webui-forge-classic
+   2. lllyasviel/stable-diffusion-webui-forge - GitHub, accessed May 12, 2025, https://github.com/lllyasviel/stable-diffusion-webui-forge
+   3. Panchovix/stable-diffusion-webui-reForge - GitHub, accessed May 12, 2025, https://github.com/Panchovix/stable-diffusion-webui-reForge
+   4. View Api Page - Gradio, accessed May 12, 2025, https://www.gradio.app/guides/view-api-page/
+   5. 17 Reasons Why Gradio Isn't Just Another UI Library - Hugging Face, accessed May 12, 2025, https://huggingface.co/blog/why-gradio-stands-out
+   6. Pinokio - Boris Mann, accessed May 12, 2025, https://bmannconsulting.com/notes/pinokio/
+   7. program.pinokio, accessed May 12, 2025, https://program.pinokio.computer/
+   8. 6Morpheus6/pinokio-wiki: Tutorial for Pinokio and its Applications - GitHub, accessed May 12, 2025, https://github.com/6Morpheus6/pinokio-wiki
+   9. API · AUTOMATIC1111/stable-diffusion-webui Wiki · GitHub, accessed May 12, 2025, https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API
+   10. stable-diffusion-webui-forge lllyasviel - MyGit, accessed May 12, 2025, https://mygit.osfipin.com/repository/743116659
+   11. Command Line Arguments and Settings · AUTOMATIC1111/stable-diffusion-webui Wiki, accessed May 12, 2025, https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Command-Line-Arguments-and-Settings
+   12. Use automatic1111 web ui api : r/StableDiffusion - Reddit, accessed May 12, 2025, https://www.reddit.com/r/StableDiffusion/comments/1irppty/use_automatic1111_web_ui_api/
+   13. Easily Install Forge And Flux Using Pinokio - Generate Images For Free And Forever!, accessed May 12, 2025, https://www.youtube.com/watch?v=yGotOmz6LpQ

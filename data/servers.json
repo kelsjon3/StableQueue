@@ -1,7 +1,7 @@
 [
   {
-    "alias": "my-local-forge",
-    "apiUrl": "http://192.168.1.100:7860",
+    "alias": "Laptop",
+    "apiUrl": "http://192.168.73.138:42003",
     "auth": null
   }
 ]

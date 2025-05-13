@@ -22,7 +22,13 @@
   },
   "homepage": "https://github.com/kelsjon3/MobileSD#readme",
   "dependencies": {
-    "axios": "^1.9.0",
-    "express": "^5.1.0"
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "event-source-polyfill": "^1.0.31",
+    "express": "^4.19.2",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.3"
   }
 }
