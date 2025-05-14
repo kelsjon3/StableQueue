@@ -48,6 +48,45 @@ if [ ! -f "docker-compose.yml" ]; then
     exit 1
 fi
 
+# Function to clear the job queue on the Unraid server
+clear_job_queue() {
+    echo -e "${YELLOW}Clearing MobileSD job queue on Unraid server...${NC}"
+    
+    # Command to execute on the Unraid server
+    ssh "${UNRAID_USER}@${UNRAID_HOST}" "bash -s" << 'EOF_CLEAR_QUEUE'
+    
+    # Path to the sqlite database
+    DB_PATH="/mnt/user/appdata/mobilesd/data/mobilesd_jobs.sqlite"
+    
+    if [ ! -f "$DB_PATH" ]; then
+        echo "Database file not found at $DB_PATH. No jobs to clear."
+        exit 0
+    fi
+    
+    # Check if sqlite3 is installed
+    if ! command -v sqlite3 &> /dev/null; then
+        echo "sqlite3 command not found. Installing..."
+        apk add --no-cache sqlite
+    fi
+    
+    # Execute SQL command to clear pending and processing jobs
+    echo "Clearing pending and processing jobs from database..."
+    sqlite3 "$DB_PATH" "UPDATE jobs SET status = 'cancelled' WHERE status IN ('pending', 'processing');"
+    
+    # Report the number of affected jobs
+    AFFECTED=$(sqlite3 "$DB_PATH" "SELECT changes();")
+    echo "Successfully marked $AFFECTED jobs as cancelled."
+    
+EOF_CLEAR_QUEUE
+
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Successfully cleared the job queue on Unraid server.${NC}"
+    else
+        echo -e "${RED}Failed to clear the job queue on Unraid server.${NC}"
+        return 1
+    fi
+}
+
 echo -e "${GREEN}Starting deployment of ${APP_NAME} to Unraid server: ${UNRAID_HOST}...${NC}"
 
 echo -e "${YELLOW}Step 1: Building Docker image locally (${IMAGE_NAME}:${IMAGE_TAG})...${NC}"
@@ -63,6 +102,10 @@ echo -e "${YELLOW}Step 3: Preparing directories and copying files to Unraid serv
 ssh "${UNRAID_USER}@${UNRAID_HOST}" "mkdir -p ${UNRAID_APP_DIR}"
 scp "${TAR_FILENAME}" "${UNRAID_USER}@${UNRAID_HOST}:${UNRAID_APP_DIR}/"
 if [ $? -ne 0 ]; then echo -e "${RED}SCP of .tar file failed! Aborting.${NC}"; rm -f "${TAR_FILENAME}"; exit 1; fi
+
+# Always clear the job queue before deploying
+echo -e "${YELLOW}Step 3.5: Clearing the job queue before deployment...${NC}"
+clear_job_queue
 
 echo -e "${YELLOW}Step 4: Deploying on Unraid server...${NC}"
 ssh "${UNRAID_USER}@${UNRAID_HOST}" "bash -s" << EOF_UNRAID_SCRIPT
@@ -117,3 +160,17 @@ rm "${TAR_FILENAME}"
 
 echo -e "${GREEN}${APP_NAME} deployment to Unraid completed successfully!${NC}"
 echo -e "${YELLOW}You should be able to access it at: http://${UNRAID_HOST}:${UNRAID_HOST_PORT}${NC}" 
+
+# Command line argument handling still available for backwards compatibility
+if [ "$1" == "--clear-queue" ]; then
+    echo -e "${YELLOW}Note: The --clear-queue flag is no longer needed as the queue is automatically cleared during deployment.${NC}"
+fi
+
+# Print help if requested
+if [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
+    echo -e "Usage: $0 [OPTIONS]"
+    echo -e "Options:"
+    echo -e "  --help, -h       Display this help message"
+    echo -e "Note: The queue is now automatically cleared during each deployment."
+    exit 0
+fi 
