@@ -141,11 +141,11 @@
     *   *Note: The direct Forge interaction logic in `routes/generation.js` is now considered legacy and needs replacement by Phase 2 components.*
 
 2.  **Phase 2: Backend - Persistent Job Queuing & Dispatcher System (CURRENTLY IN PROGRESS)**
-    *   **Define & Implement Job Queue Persistence:** (Choose method: JSON/SQLite). *(Task: Implement)*
-    *   **Refactor `POST /api/v1/generate`:** Adapt to add jobs to the internal queue and return `mobilesd_job_id`. *(Task: Implement)*
-    *   **Develop Backend Job Dispatcher:** Implement service to pick pending jobs and submit them to Forge, including correct checkpoint handling. *(Task: Implement)*
-    *   **Develop Backend Forge Job Monitor:** Implement service to track Forge jobs via backend SSE, download/save images, update job status. *(Task: Implement)*
-    *   **Implement Backend APIs for Queue Management:** Create `GET /api/v1/queue/jobs`, `GET /api/v1/queue/jobs/:job_id/status`, etc. *(Task: Implement)*
+    *   **Define & Implement Job Queue Persistence:** (Choose method: JSON/SQLite). *(Task: Completed)*
+    *   **Refactor `POST /api/v1/generate`:** Adapt to add jobs to the internal queue and return `mobilesd_job_id`. *(Task: Completed)*
+    *   **Develop Backend Job Dispatcher:** Implement service to pick pending jobs and submit them to Forge, including correct checkpoint handling. *(Task: Completed)*
+    *   **Develop Backend Forge Job Monitor:** Implement service to track Forge jobs via backend SSE, download/save images, update job status. *(Task: Completed)*
+    *   **Implement Backend APIs for Queue Management:** Create `GET /api/v1/queue/jobs`, `GET /api/v1/queue/jobs/:job_id/status`, etc. *(Task: Completed)*
     *   **Implement Backend APIs for Gallery:** Create `GET /api/v1/gallery/images`, image serving, etc. *(Task: Implement)*
 
 3.  **Phase 3: Frontend - Queue Management & Gallery UI (NEXT MAJOR PHASE - Blocked by Phase 2)**
@@ -181,6 +181,8 @@
     *   Start `public/js/app.js` to fetch initial data (servers, models) from the backend API and populate UI elements.
 
 ## MobileSD Development Plan
+
+*Note: The following "MobileSD Development Plan" section, with its own Phases I-VI and "VII. Immediate Steps", describes an earlier or alternative implementation path focusing on a synchronous interaction with Forge's FastAPI endpoints (e.g., `/sdapi/v1/txt2img`) via a `services/dispatcher.js`. While parts of this may have been partially implemented, the **primary and current development focus for achieving a robust, browser-independent job queuing and processing system is detailed in Section II.bis: Core Backend: Persistent Job Queuing & Dispatcher System and its corresponding VII. Immediate Steps (Revised - Focusing on Phase 2 Implementation).** The Section II.bis approach utilizes Forge's asynchronous Gradio API (`/queue/join` and `/queue/data`) for enhanced resilience and background processing.*
 
 **Overall Goal:** Create a simple mobile-friendly web UI to interact with a remote Stable Diffusion Forge server, focusing initially on text-to-image generation.
 
@@ -287,6 +289,8 @@
 ---
 
 ### VII. Immediate Steps
+
+*Note: These steps relate to the FastAPI-based dispatcher described in "Phase 4: Generator Page - Main Action" above. For the primary development path focusing on the asynchronous Gradio API and robust background processing, please refer to **"VII. Immediate Steps (Revised - Focusing on Phase 2 Implementation)"** earlier in this document.*
 
 1.  **Modify Dispatcher for Image Saving:**
     *   **File:** `services/dispatcher.js`
