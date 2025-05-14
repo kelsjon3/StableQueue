@@ -185,6 +185,9 @@ function constructGenerationPayloadData(params, forgeInternalTaskId) {
     if (params.hr_resize_x !== undefined) data[15] = parseInt(params.hr_resize_x, 10);
     if (params.hr_resize_y !== undefined) data[16] = parseInt(params.hr_resize_y, 10);
     
+    // Set checkpoint directly in the generation array if provided
+    if (params.checkpoint_name !== undefined) data[17] = params.checkpoint_name;
+    
     if (params.sampler_name !== undefined) data[28] = params.sampler_name;
     if (params.scheduler !== undefined) data[29] = params.scheduler;
 
@@ -274,17 +277,9 @@ async function processJob(job) {
     }
 
     try {
-        const checkpointPayload = {
-            data: [checkpoint_name],
-            event_data: null,
-            fn_index: 8, 
-            session_hash: forge_session_hash,
-            trigger_id: 2845 // ADDED from HAR analysis
-        };
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Setting checkpoint to '${checkpoint_name}' with session_hash '${forge_session_hash}'...`);
-        await axios.post(`${forgeBaseUrl}/queue/join`, checkpointPayload, axiosConfig); 
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Checkpoint set successfully.`);
-
+        // Skip the separate checkpoint setting call and directly include checkpoint name in the generation payload
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Including checkpoint '${checkpoint_name}' directly in generation payload`);
+        
         const generationDataArray = constructGenerationPayloadData(generation_params, forgeInternalTaskId);
         const generationPayload = {
             data: generationDataArray,

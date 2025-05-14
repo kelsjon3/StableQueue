@@ -52,13 +52,12 @@ async function downloadImage(imageUrl, job, filename) {
 }
 
 async function handleProcessCompleted(job, eventData) {
-    console.log(`[Monitor] Job ${job.mobilesd_job_id}: Received 'process_completed' event from Forge.`);
-    
+    // Only log a concise message here, not the full event data
     let processedSuccessfully = false; // Flag to indicate if we found and processed images
     let foundImagesToDownload = false; // Flag to indicate we at least found images, even if downloading fails
 
     if (!eventData || !eventData.output) {
-        console.error(`[Monitor] Job ${job.mobilesd_job_id}: Invalid or missing output data in 'process_completed' event.`);
+        console.log(`[Monitor] Job ${job.mobilesd_job_id}: This appears to be an empty process_completed event. Checking if another will follow.`);
         return processedSuccessfully; // Return false
     }
 
@@ -389,7 +388,8 @@ async function startMonitoringJob(mobilesdJobId) {
                     break;
                 case 'process_completed':
                     try {
-                        console.log(`[Monitor] Job ${job.mobilesd_job_id}: Received 'process_completed' event data from Forge:`, JSON.stringify(eventData, null, 2));
+                        // Only log a message that we received an event, but don't log the full data unless in debug mode
+                        console.log(`[Monitor] Job ${job.mobilesd_job_id}: Received 'process_completed' event from Forge.`);
                         
                         // Create a flag to identify if this is an image-containing event
                         const hasImages = eventData.output && 
@@ -532,5 +532,6 @@ async function reinitializeMonitoring() {
 module.exports = {
     startMonitoringJob,
     closeMonitor, // Might be useful if a job is cancelled
-    reinitializeMonitoring
+    reinitializeMonitoring,
+    getActiveMonitors: () => activeMonitors // Add a function to access activeMonitors for debugging
 }; 

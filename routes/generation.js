@@ -189,6 +189,26 @@ router.delete('/queue/jobs/:jobId', (req, res) => {
     }
 });
 
+// GET /api/v1/debug/monitors - Show active monitors (FOR DEBUGGING ONLY)
+router.get('/debug/monitors', (req, res) => {
+    console.log(`[API] Received GET /api/v1/debug/monitors request`);
+    
+    try {
+        // Import forgeJobMonitor to access activeMonitors
+        const forgeJobMonitor = require('../services/forgeJobMonitor');
+        
+        // Get active monitors
+        const activeMonitors = forgeJobMonitor.getActiveMonitors();
+        
+        res.status(200).json({
+            active_monitors: Object.keys(activeMonitors || {})
+        });
+    } catch (error) {
+        console.error(`[API] Error getting active monitors:`, error);
+        res.status(500).json({ error: `Failed to get active monitors: ${error.message}` });
+    }
+});
+
 // GET /api/v1/progress - Keep existing or remove/comment out?
 // This endpoint is now technically obsolete for its original purpose (client-side SSE proxy).
 // The client will poll a different endpoint (e.g., GET /api/v1/queue/jobs/:id/status).
