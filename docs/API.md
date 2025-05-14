@@ -8,6 +8,11 @@ This document provides details on the API endpoints available in the MobileSD ap
 
 Adds a new job to the queue for image generation.
 
+**Important Notes:**
+- The prompt parameter must be named `positive_prompt` (not just `prompt`) to ensure proper handling
+- Checkpoint paths can use either forward slashes or backslashes - the system will normalize them
+- The API supports both relative paths (e.g., "Pony/cyberrealisticPony_v8.safetensors") and absolute paths
+
 **Request:**
 ```json
 {
@@ -74,8 +79,8 @@ Gets the status of a specific job.
     "images": ["88615c9d_1747190448393_00028-1806652750.png"],
     "info": "Job completed and images downloaded by MobileSD backend.",
     "generation_info": {
-      "prompt": "3 pretty girls",
-      "all_prompts": ["3 pretty girls"],
+      "prompt": "a pretty girl",
+      "all_prompts": ["a pretty girl"],
       "negative_prompt": "ugly",
       "all_negative_prompts": ["ugly"],
       "seed": 1806652750
@@ -207,4 +212,53 @@ Gets information about an image from Civitai.
 
 ### POST /api/v1/civitai/download-model
 
-Downloads a model from Civitai to the server. 
+Downloads a model from Civitai to the server.
+
+## Debugging APIs
+
+### GET /api/v1/debug/verify-checkpoint
+
+Verifies if a checkpoint exists on a Forge server and tests the path normalization process.
+
+**Query Parameters:**
+- `checkpoint_path` (required): The checkpoint path to verify (e.g., "Pony/cyberrealisticPony_v8.safetensors")
+- `server_alias` (required): The alias of the server to check against
+
+**Response:**
+```json
+{
+  "success": true,
+  "original_path": "Pony/cyberrealisticPony_v8.safetensors",
+  "normalized_path": "Pony\\cyberrealisticPony_v8.safetensors",
+  "matched_model": "Pony\\cyberrealisticPony_v8.safetensors [9f90c59f3a]",
+  "available_models": [
+    // List of all available models on the server
+  ]
+}
+```
+
+### GET /api/v1/debug/models-cache
+
+Retrieves the current state of the model database cache.
+
+**Response:**
+```json
+{
+  "cache_size": 24,
+  "models": [
+    {
+      "id": 1,
+      "name": "cyberrealisticPony_v8",
+      "path": "Pony/cyberrealisticPony_v8.safetensors",
+      "normalized_path": "Pony\\cyberrealisticPony_v8.safetensors",
+      "hash": "9f90c59f3a",
+      "title": "Pony\\cyberrealisticPony_v8.safetensors [9f90c59f3a]",
+      "aliases": [
+        "Pony/cyberrealisticPony_v8.safetensors",
+        "Pony\\cyberrealisticPony_v8.safetensors"
+      ]
+    },
+    // Additional models...
+  ]
+}
+``` 
