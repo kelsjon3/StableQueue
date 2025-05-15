@@ -129,6 +129,24 @@ const scanModelDirectory = async (directoryPath, fileExtensions, rootModelPath) 
   return models;
 };
 
+// --- New function to ensure data directory exists ---
+const initializeDataDirectory = async () => {
+  const configPath = process.env.CONFIG_DATA_PATH || path.join(__dirname, '../data');
+  try {
+    await fs.mkdir(configPath, { recursive: true });
+    console.log(`Data directory ensured at: ${configPath}`);
+    // Optionally, ensure subdirectories like outputs if they are relative to data path
+    // const outputPath = process.env.STABLE_DIFFUSION_SAVE_PATH || path.join(configPath, 'outputs');
+    // await fs.mkdir(outputPath, { recursive: true });
+    // console.log(`Outputs directory ensured at: ${outputPath}`);
+
+  } catch (error) {
+    console.error(`Error ensuring data directory ${configPath}:`, error);
+    // Depending on the importance, you might want to throw the error or handle it
+    // For now, just logging, as subsequent operations might still work or fail more specifically
+  }
+};
+
 // --- Exports --- 
 
 module.exports = {
@@ -138,4 +156,5 @@ module.exports = {
   scanModelDirectory,
   getServerByAlias,
   getAxiosConfig,
+  initializeDataDirectory,
 }; 

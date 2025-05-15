@@ -184,12 +184,33 @@ function updateJob(mobilesdJobId, updates) {
 }
 
 /**
- * Finds all pending jobs, oldest first.
+ * Finds pending jobs, oldest first.
+ * @param {number} limit - Optional max number of jobs to return
+ * @param {string} minCreationTimestamp - Optional ISO timestamp, only jobs created after this time will be returned
  * @returns {Array<object>} Array of pending job objects with parsed JSON.
  */
-function findPendingJobs() {
-    const stmt = db.prepare("SELECT * FROM jobs WHERE status = 'pending' ORDER BY creation_timestamp ASC");
-    const rows = stmt.all();
+function findPendingJobs(limit = 0, minCreationTimestamp = null) {
+    let sql = "SELECT * FROM jobs WHERE status = 'pending'";
+    const params = [];
+    
+    // Add timestamp filter if provided
+    if (minCreationTimestamp) {
+        sql += " AND creation_timestamp >= ?";
+        params.push(minCreationTimestamp);
+    }
+    
+    // Add order by
+    sql += " ORDER BY creation_timestamp ASC";
+    
+    // Add limit if provided
+    if (limit > 0) {
+        sql += " LIMIT ?";
+        params.push(limit);
+    }
+    
+    const stmt = db.prepare(sql);
+    const rows = stmt.all(...params);
+    
     return rows.map(row => ({
         ...row,
         generation_params: JSON.parse(row.generation_params_json || '{}'),

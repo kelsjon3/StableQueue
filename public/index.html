@@ -11,6 +11,9 @@
         <h1>MobileSD</h1>
         <nav>
             <button id="nav-generator" class="nav-button active">Generator</button>
+            <button id="nav-queue" class="nav-button">Queue</button>
+            <button id="nav-gallery" class="nav-button">Gallery</button>
+            <button id="nav-models" class="nav-button">Models</button>
             <button id="nav-server-setup" class="nav-button">Server Setup</button>
         </nav>
     </header>
@@ -162,6 +165,149 @@
                  </div>
             </section>
 
+        </section>
+
+        <section id="queue-view" style="display: none;">
+            <h2>Job Queue</h2>
+            
+            <div id="queue-controls" class="card">
+                <button id="refresh-queue-btn" class="secondary-button">Refresh Queue</button>
+                <div class="queue-filter">
+                    <label for="queue-status-filter">Status:</label>
+                    <select id="queue-status-filter">
+                        <option value="">All Jobs</option>
+                        <option value="pending">Pending</option>
+                        <option value="processing">Processing</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div id="queue-container" class="card">
+                <table id="queue-table">
+                    <thead>
+                        <tr>
+                            <th>Job ID</th>
+                            <th>Status</th>
+                            <th>Server</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="queue-jobs">
+                        <!-- Job rows will be inserted here dynamically -->
+                    </tbody>
+                </table>
+                <div id="queue-loading">Loading jobs...</div>
+                <div id="queue-empty" style="display: none;">No jobs found.</div>
+            </div>
+            
+            <div id="job-details-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <span class="close-modal">&times;</span>
+                    <div class="modal-body">
+                        <h3>Job Details</h3>
+                        <div id="job-details-content"></div>
+                        <div id="job-actions">
+                            <button id="cancel-job-btn" class="danger-button">Cancel Job</button>
+                            <button id="delete-job-btn" class="danger-button">Delete Job</button>
+                            <button id="view-job-results-btn" class="secondary-button">View Results</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="gallery-view" style="display: none;">
+            <h2>Image Gallery</h2>
+            
+            <div id="gallery-controls" class="card">
+                <button id="refresh-gallery-btn" class="secondary-button">Refresh Gallery</button>
+                <div class="gallery-filter">
+                    <label for="gallery-search">Search:</label>
+                    <input type="text" id="gallery-search" placeholder="Filter by filename...">
+                </div>
+            </div>
+            
+            <div id="gallery-container" class="card">
+                <div id="gallery-images"></div>
+                <div id="gallery-loading">Loading images...</div>
+                <div id="gallery-empty" style="display: none;">No images found.</div>
+            </div>
+            
+            <div id="image-viewer-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <span class="close-modal">&times;</span>
+                    <div class="modal-body">
+                        <img id="modal-image" src="" alt="Full size image">
+                        <div id="modal-image-info"></div>
+                        <button id="delete-image-btn" class="danger-button">Delete Image</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="models-view" style="display: none;">
+            <h2>Model Library</h2>
+            
+            <div id="models-controls" class="card">
+                <button id="refresh-models-btn" class="secondary-button">Refresh Models</button>
+                
+                <div class="models-filters">
+                    <div class="filter-group">
+                        <label for="model-type-filter">Type:</label>
+                        <select id="model-type-filter">
+                            <option value="">All Models</option>
+                            <option value="checkpoint">Checkpoints</option>
+                            <option value="lora">LoRAs</option>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="base-model-filter">Base Model:</label>
+                        <select id="base-model-filter">
+                            <option value="">All Base Models</option>
+                            <!-- Base model options will be populated dynamically -->
+                        </select>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <label for="model-search">Search:</label>
+                        <input type="text" id="model-search" placeholder="Search models...">
+                    </div>
+                </div>
+            </div>
+            
+            <div id="models-container" class="card">
+                <div id="models-grid"></div>
+                <div id="models-loading">Loading models...</div>
+                <div id="models-empty" style="display: none;">No models found.</div>
+            </div>
+            
+            <div id="model-details-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <span class="close-modal">&times;</span>
+                    <div class="modal-body">
+                        <div id="model-preview-container">
+                            <img id="model-preview-image" src="" alt="Model preview">
+                        </div>
+                        <div id="model-info">
+                            <h3 id="model-name"></h3>
+                            <div class="model-meta">
+                                <span id="model-type-badge" class="badge"></span>
+                                <span id="model-base-badge" class="badge"></span>
+                            </div>
+                            <p id="model-description"></p>
+                            <div id="model-details"></div>
+                            <div id="model-actions">
+                                <a id="model-civitai-link" href="#" target="_blank" class="button secondary-button">View on Civitai</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </section>
 
         <section id="server-setup-view" style="display: none;">

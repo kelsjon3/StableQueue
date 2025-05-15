@@ -20,6 +20,7 @@ This document outlines the main files and directories in the MobileSD project.
     *   `servers.js`: API endpoints for managing Forge server configurations.
     *   `resources.js`: API endpoints for listing checkpoints and LoRAs.
     *   `civitai.js`: API endpoints for Civitai integration (searching and downloading models).
+    *   `models.js`: API endpoints for managing models, including listing models with metadata, serving preview images, and refreshing Civitai metadata.
     *   `generation.js`: API endpoints for image generation and job status retrieval.
 *   `services/`: Backend services for job processing and monitoring.
     *   `gradioJobDispatcher.js`: Service responsible for processing pending jobs from the SQLite database queue. It connects to the Forge server using the Gradio API (`/queue/join`), sets the checkpoint model, submits generation tasks, and updates job status in the database. Includes path normalization for cross-platform compatibility (forward/backslashes).
@@ -50,7 +51,12 @@ MobileSD uses a single-container Docker approach with Node.js/Express serving bo
 3. **Resource Management**: Scan and access checkpoints and LoRAs from configured paths.
 4. **Asynchronous Processing**: Background job processing using Forge's Gradio API.
 5. **Image Saving**: Automatically save generated images to a configurable directory.
-6. **Civitai Integration**: Search and download models directly from Civitai.
+6. **Civitai Integration**: Search and download models directly from Civitai with the following features:
+   - Rate-limited API requests to prevent excessive calls
+   - Compatible metadata storage with Forge extension format
+   - Multiple preview image formats (both standard JPG and Forge's .preview.png)
+   - Model identification via both name and hash matching
+   - Display of Civitai IDs, links, and metadata in model details
 7. **Model Database**: SQLite-based model database with efficient lookup and path normalization for cross-platform compatibility.
 
 The system uses a three-pronged approach for generation:

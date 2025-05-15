@@ -20,9 +20,11 @@
 3.  **Local Resource Management & Model Access Strategy (Phased Approach):** (APIs for scanning master library Implemented)
 4.  **Civitai API Integration:** (APIs Implemented)
     * **Enhanced Civitai Integration:**
-        * **Current State:** Basic APIs for image info and model downloads are implemented.
-        * **Metadata Compatibility:** Update model download process to maintain compatibility with Forge extensions by using the same metadata format and structure.
-        * **Automated Model Identification:** Implement improved matching logic between local models and Civitai database using both names and hash identifiers.
+        * **Current State:** APIs for image info, model downloads, and metadata management are implemented.
+        * **Metadata Compatibility:** ✅ IMPLEMENTED: Model metadata is now stored in Forge-compatible format, enabling compatibility with existing Forge extensions.
+        * **Automated Model Identification:** ✅ IMPLEMENTED: Improved matching logic between local models and Civitai database using both names and hash identifiers.
+        * **Preview Image Handling:** ✅ IMPLEMENTED: Preview images are saved in multiple formats (both modelname.jpg and modelname.preview.png) for better compatibility.
+        * **Rate Limiting:** ✅ IMPLEMENTED: Added proper rate limiting for Civitai API requests to prevent excessive requests.
         * **On-Demand Model Download Framework:** Build infrastructure for automatic detection of missing models and triggering downloads during job processing.
 5.  **Core Generation Endpoints (Refactoring for Phase 2):**
     *   **Phase 1 Implementation (Now Deprecated but present in `routes/generation.js`):**
@@ -38,6 +40,13 @@
         *   Implemented checkpoint handling using path normalization (converting forward slashes to backslashes).
         *   Created model database system for efficient checkpoint lookup and path normalization.
         *   Fixed payload template to properly map positive_prompt instead of using hardcoded defaults.
+        *   **Enhanced Civitai Integration:** *(Phase 2 Tasks)*
+            *   **Metadata Compatibility:** ✅ COMPLETED: Updated the download process to maintain metadata format compatibility with Forge extensions, storing data in the same location and format.
+            *   **Model Identification System:** ✅ COMPLETED: Enhanced model scanning to extract and use Civitai IDs from existing metadata files and match with appropriate data.
+            *   **Preview Image Compatibility:** ✅ COMPLETED: Implemented support for identifying and using preview images in multiple formats, prioritizing JPG files for better compatibility.
+            *   **Civitai API Rate Limiting:** ✅ COMPLETED: Added safeguards against excessive API requests with configurable delays between requests.
+            *   **On-Demand Download Logic:** Implement system to detect missing models during job processing and trigger downloads. *(Not Started)*
+            *   **Download Queue Manager:** Create service to handle multiple concurrent model downloads with prioritization. *(Not Started)*
 
 ## II.bis. Core Backend: Persistent Job Queuing & Dispatcher System (IMPLEMENTED)
 
@@ -238,8 +247,11 @@
     *   Create a dedicated tab to view and manage the job queue.
     *   Implement functionality to cancel or delete jobs.
     *   Add job reordering and prioritization features.
-4.  **Enhance Civitai Integration:**
-    *   Update model download process to maintain metadata compatibility.
+4.  **Further Enhance Civitai Integration:**
+    *   ✅ COMPLETED: Metadata compatibility with Forge extensions
+    *   ✅ COMPLETED: Rate limiting for API requests
+    *   ✅ COMPLETED: Preview image handling in multiple formats
+    *   ✅ COMPLETED: Display of Civitai ID and URLs in model details UI
     *   Implement automatic model detection and download during job processing.
     *   Create a user-friendly UI for browsing and managing Civitai models.
 5.  **Improve Error Handling and Robustness:**
@@ -268,6 +280,76 @@
     *   **In-Memory Caching:** Balancing database queries with in-memory caching significantly improves performance.
     *   **Atomic Updates:** Ensuring that database updates are atomic prevents corrupting the job queue state.
     *   **Backup Mechanisms:** Implementing database backup before destructive operations provides safety nets.
+
+## IX. Models Tab Implementation Plan
+
+### Overview
+Add a new "Models" tab to display both checkpoints and LoRAs with their preview images, Civitai links, and critical metadata including base model information.
+
+### Backend Requirements
+
+1. **New API Endpoints:**
+   - `GET /api/v1/models` - List all models (checkpoints & LoRAs) with metadata
+   - `GET /api/v1/models/:id/preview` - Get preview image for a model
+   - `GET /api/v1/models/:id/info` - Get detailed model info including Civitai metadata
+
+2. **Data Processing:**
+   - Parse model metadata files (JSON/YAML) for:
+     - Civitai IDs
+     - Base model information (SDXL, Pony, Flux.1 D, etc.)
+     - Other technical specifications
+   - Extract and serve preview images from model folders
+   - Cache results to improve performance
+
+### Frontend Implementation
+
+1. **UI Components:**
+   - Add "Models" tab in main navigation
+   - Create card-based grid layout for model display
+   - Implement filters for:
+     - Model types (checkpoints/LoRAs)
+     - Base models (SDXL, Pony, Flux.1 D, etc.)
+   - Add search functionality by name/tags
+
+2. **Model Card Design:**
+   - Preview image (with placeholder for missing previews)
+   - Model name
+   - Type badge (checkpoint/LoRA)
+   - **Base Model** label (SDXL, Pony, Flux.1 D, etc.)
+   - Civitai link (if available)
+   - Basic info (resolution, version, etc.)
+
+### Implementation Steps
+
+1. **Backend Development:**
+   - Create model scanning utilities to build metadata database
+   - Extract base model information from metadata files
+   - Implement API endpoints for model listing and filtering
+   - Add preview image handling
+
+2. **Frontend Development:**
+   - Add tab to navigation
+   - Create models page layout with grid view
+   - Implement model cards with base model information
+   - Add filtering by base model type
+   - Add loading states and error handling
+
+3. **Integration:**
+   - Connect frontend to new API endpoints
+   - Implement caching strategy for faster loads
+   - Add refresh functionality
+
+### Timeline Estimate
+- Backend API endpoints: 2-3 days
+- Frontend UI implementation: 2-3 days
+- Testing and refinement: 1-2 days
+
+### Future Enhancements
+- Model management (delete, rename)
+- Direct model download from Civitai
+- Model usage statistics
+- Favorites/collection organization
+- Base model compatibility warnings when selecting models
 
 *Note: The following "MobileSD Development Plan" section, with its own Phases I-VI and "VII. Immediate Steps", describes an earlier or alternative implementation path focusing on a synchronous interaction with Forge's FastAPI endpoints (e.g., `/sdapi/v1/txt2img`) via a `services/dispatcher.js`. While parts of this may have been partially implemented, the **primary and current development focus for achieving a robust, browser-independent job queuing and processing system is detailed in Section II.bis: Core Backend: Persistent Job Queuing & Dispatcher System and its corresponding VII. Immediate Steps (Revised - Focusing on Phase 3 Frontend Development).** The Section II.bis approach utilizes Forge's asynchronous Gradio API (`/queue/join` and `/queue/data`) for enhanced resilience and background processing.*
 

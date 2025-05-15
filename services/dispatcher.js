@@ -6,12 +6,17 @@ const { readJobQueue, updateJobInQueue, addJobToQueue, getJobById } = require('.
 const { readServersConfig } = require('../utils/configHelpers');
 const fs = require('fs').promises; // Needed for image saving
 const path = require('path'); // Needed for image saving
+const modelDB = require('../utils/modelDatabase'); // Import our model database module
 
 // Simple in-memory set to track servers currently processing a job
 const busyServers = new Set();
 
+// Cache of server model mappings to reduce API calls
+const serverModelCaches = new Map(); // Format: { serverAlias: { lastUpdated: timestamp, models: [...] } }
+
 const DISPATCH_INTERVAL_MS = 5000; // Check queue every 5 seconds (adjust as needed)
 const JOB_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes timeout for txt2img request
+const MODEL_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes TTL for model cache
 let dispatchIntervalId = null;
 
 // Helper to get server config and handle auth
@@ -41,54 +46,138 @@ async function getServerConfig(alias) {
     }
 }
 
-// --- ADDED HELPER FUNCTION ---
-async function verifyCheckpointExists(serverApiUrl, axiosBaseConfig, checkpointName) {
-    const modelsUrl = `${serverApiUrl}/sdapi/v1/sd-models`;
-    console.log(`[Dispatcher] Verifying checkpoint '${checkpointName}' exists via ${modelsUrl}`);
+/**
+ * Enhanced function to verify if a checkpoint exists on a Forge server
+ * Uses multiple matching strategies including model database lookups
+ * 
+ * @param {string} serverAlias - The alias of the Forge server
+ * @param {string} serverApiUrl - The API URL of the Forge server
+ * @param {Object} axiosBaseConfig - Configuration for axios requests
+ * @param {string} checkpointName - The name of the checkpoint to verify
+ * @returns {Promise<string|null>} The exact title string if found, null otherwise
+ */
+async function verifyCheckpointExists(serverAlias, serverApiUrl, axiosBaseConfig, checkpointName) {
+    console.log(`[Dispatcher] Verifying checkpoint '${checkpointName}' on server '${serverAlias}'`);
+    
+    if (!checkpointName) {
+        console.error('[Dispatcher] No checkpoint name provided');
+        return null;
+    }
+    
     try {
-        // Use a shorter timeout for this metadata check
-        const modelsConfig = { ...axiosBaseConfig, timeout: 15000 }; // 15 second timeout
-        const response = await axios.get(modelsUrl, modelsConfig);
-        
-        if (response.status === 200 && Array.isArray(response.data)) {
-            const models = response.data;
-            // Normalize slashes for comparison
-            const normalizedCheckpointName = checkpointName.replace(/\\/g, '/'); // Ensure our name uses forward slashes
-
-            // Find the model and return its exact title
-            const foundModel = models.find(model => {
-                if (!model.title) return false;
-                const normalizedTitle = model.title.replace(/\\/g, '/'); // Normalize title from Forge
-                // Check if the normalized title starts with the normalized name + space + bracket
-                return normalizedTitle.startsWith(normalizedCheckpointName + ' [');
-            });
-
-            if (foundModel) {
-                console.log(`[Dispatcher] Checkpoint '${checkpointName}' verified. Using exact title: ${foundModel.title}`);
-                return foundModel.title; // Return the exact title string
-            } else {
-                console.warn(`[Dispatcher] Checkpoint '${checkpointName}' not found in Forge model list (normalized check).`);
-                 // --- DEBUG LOG --- 
-                 // console.log("[Dispatcher DEBUG] Available model titles from Forge:", models.map(m => m.title));
-                 // --- END DEBUG LOG ---
-                return null; // Return null if not found
-            }
-        } else {
-            console.error(`[Dispatcher] Failed to verify checkpoint: Unexpected response status ${response.status} or invalid data format.`);
-            return null; // Return null on error
+        // STEP 1: Try to find the model in our local database with fast lookup
+        const cachedModel = modelDB.findModelFast(checkpointName);
+        if (cachedModel) {
+            console.log(`[Dispatcher] Found checkpoint in local cache: ${cachedModel.forgeTitle}`);
+            return cachedModel.forgeTitle;
         }
+        
+        // STEP 2: Check if we need to fetch models from Forge
+        const modelsUrl = `${serverApiUrl}/sdapi/v1/sd-models`;
+        let forgeModels = [];
+        const now = Date.now();
+        
+        // Check if we have a recent cache for this server
+        const serverCache = serverModelCaches.get(serverAlias);
+        if (serverCache && (now - serverCache.lastUpdated < MODEL_CACHE_TTL_MS)) {
+            console.log(`[Dispatcher] Using cached model list for server '${serverAlias}'`);
+            forgeModels = serverCache.models;
+        } else {
+            // Fetch models from Forge
+            console.log(`[Dispatcher] Fetching models from Forge server '${serverAlias}'`);
+            const modelsConfig = { ...axiosBaseConfig, timeout: 15000 }; // 15 second timeout
+            const response = await axios.get(modelsUrl, modelsConfig);
+            
+            if (response.status === 200 && Array.isArray(response.data)) {
+                forgeModels = response.data;
+                
+                // Update cache
+                serverModelCaches.set(serverAlias, {
+                    lastUpdated: now,
+                    models: forgeModels
+                });
+                
+                // Import models into our database
+                modelDB.importModelsFromForge(forgeModels, 'checkpoint');
+            } else {
+                console.error(`[Dispatcher] Unexpected response status ${response.status} or invalid data format`);
+                return null;
+            }
+        }
+        
+        // STEP 3: Try multiple path format variations
+        // Normalize checkpoint name for comparison
+        const normalizedForward = checkpointName.replace(/\\/g, '/');
+        const normalizedBackslash = checkpointName.replace(/\//g, '\\');
+        const filename = path.basename(checkpointName);
+        
+        // Try all matching strategies
+        let foundModel = null;
+        
+        // 3.1 Exact title match
+        foundModel = forgeModels.find(model => model.title === checkpointName);
+        if (foundModel) {
+            console.log(`[Dispatcher] Found exact match: ${foundModel.title}`);
+            return foundModel.title;
+        }
+        
+        // 3.2 Forward slash match
+        foundModel = forgeModels.find(model => {
+            if (!model.title) return false;
+            const titleParts = model.title.split(' [');
+            const namePart = titleParts[0];
+            return namePart === normalizedForward;
+        });
+        if (foundModel) {
+            console.log(`[Dispatcher] Found forward slash match: ${foundModel.title}`);
+            return foundModel.title;
+        }
+        
+        // 3.3 Backslash match
+        foundModel = forgeModels.find(model => {
+            if (!model.title) return false;
+            const titleParts = model.title.split(' [');
+            const namePart = titleParts[0];
+            return namePart === normalizedBackslash;
+        });
+        if (foundModel) {
+            console.log(`[Dispatcher] Found backslash match: ${foundModel.title}`);
+            return foundModel.title;
+        }
+        
+        // 3.4 Filename match (fallback)
+        foundModel = forgeModels.find(model => {
+            if (!model.title) return false;
+            const titleParts = model.title.split(' [');
+            const namePart = titleParts[0];
+            return path.basename(namePart) === filename;
+        });
+        if (foundModel) {
+            console.log(`[Dispatcher] Found filename match: ${foundModel.title}`);
+            return foundModel.title;
+        }
+        
+        // STEP 4: Enhanced debugging and detailed error message
+        console.warn(`[Dispatcher] Checkpoint '${checkpointName}' not found. Attempted matches:
+        - Exact: '${checkpointName}'
+        - Forward slash: '${normalizedForward}'
+        - Backslash: '${normalizedBackslash}'
+        - Filename: '${filename}'`);
+        
+        console.log(`[Dispatcher] Available models: ${forgeModels.map(m => m.title).slice(0, 5).join(', ')}${forgeModels.length > 5 ? '...' : ''}`);
+        
+        return null; // Not found with any strategy
     } catch (error) {
         let errorMsg = error.message;
-         if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-             errorMsg = `Timeout while verifying checkpoint via ${modelsUrl}`;
-         } else if (error.response) {
-             errorMsg = `Forge API Error (${modelsUrl}): ${error.response.status} - ${JSON.stringify(error.response.data)}`;
-         }
+        if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+            errorMsg = `Timeout while verifying checkpoint`;
+        } else if (error.response) {
+            errorMsg = `Forge API Error: ${error.response.status} - ${JSON.stringify(error.response.data)}`;
+        }
         console.error(`[Dispatcher] Failed to verify checkpoint '${checkpointName}': ${errorMsg}`);
-        return null; // Return null on error
+        return null;
     }
 }
-// --- END HELPER FUNCTION ---
 
 // Re-usable helper to save images (adapted from monitor)
 async function saveImageData(base64Data, jobId, index = 0) {
@@ -131,27 +220,39 @@ async function saveImageData(base64Data, jobId, index = 0) {
     }
 }
 
-// Main dispatcher loop
+// Main job dispatch function
 async function dispatchPendingJobs() {
-    // console.log('[Dispatcher] Checking for pending jobs...');
-    let queue;
-    let serversConfig; // Read full config once
+    console.log('[Dispatcher] Checking for pending jobs...');
+    
+    // Get available servers - servers that are not in busyServers
+    let serversConfig = [];
     try {
-        queue = await readJobQueue();
-        serversConfig = await readServersConfig(); // Use the helper from configHelpers
+        serversConfig = await readServersConfig();
     } catch (error) {
-        console.error('[Dispatcher] Error reading job queue or server config:', error);
-        return; // Skip this interval if queue read fails
+        console.error('[Dispatcher] Error loading server configs:', error);
+        return; // Don't kill the interval, maybe it'll work next time
     }
 
-    const pendingJobs = queue.filter(job => job.status === 'pending');
+    const availableServerAliases = serversConfig
+        .map(server => server.alias)
+        .filter(alias => !busyServers.has(alias));
 
-    if (pendingJobs.length === 0) {
-        // console.log('[Dispatcher] No pending jobs found.');
+    if (availableServerAliases.length === 0) {
+        // All known servers are busy, nothing to do
+        console.log('[Dispatcher] All servers are busy, skipping this run.');
         return;
     }
 
-    console.log(`[Dispatcher] Found ${pendingJobs.length} pending jobs. Busy servers: ${[...busyServers].join(', ') || 'None'}`);
+    // Find pending jobs
+    const pendingJobs = await readJobQueue({ status: 'pending' });
+
+    if (pendingJobs.length === 0) {
+        // No pending jobs, nothing to do
+        console.log('[Dispatcher] No pending jobs found.');
+        return;
+    }
+
+    console.log(`[Dispatcher] Found ${pendingJobs.length} pending jobs.`);
 
     for (const job of pendingJobs) {
         const serverAlias = job.target_server_alias;
@@ -170,14 +271,27 @@ async function dispatchPendingJobs() {
             continue;
         }
 
+        // *** FIX: Immediately update job status to processing to make it visible in queue ***
+        try {
+            console.log(`[Dispatcher] Updating job ${job.mobilesd_job_id} status to 'processing' immediately`);
+            await updateJobInQueue(job.mobilesd_job_id, {
+                status: 'processing',
+                processing_start_timestamp: new Date().toISOString(),
+                result_details: {
+                    info: 'Job is being processed by Forge dispatcher.',
+                    progress_percentage: 0
+                }
+            });
+        } catch (statusUpdateError) {
+            console.error(`[Dispatcher] Failed to update job ${job.mobilesd_job_id} status:`, statusUpdateError);
+            // Continue anyway, we'll try again in the main try block
+        }
+
         // Mark server as busy *before* starting the async operation
         busyServers.add(serverAlias);
         console.log(`[Dispatcher] Processing job ${job.mobilesd_job_id} synchronously on server ${serverAlias}`);
-
+        
         try {
-            // Update job status to processing
-            await updateJobInQueue(job.mobilesd_job_id, { status: 'processing', processing_start_timestamp: new Date().toISOString() });
-
             // --- Setup Axios Config (Auth + Base Timeout - used for helper calls too) ---
             const baseAxiosConfig = { timeout: JOB_TIMEOUT_MS }; // Base config with long timeout for txt2img
             if (server.auth && server.auth.username && server.auth.password) {
@@ -188,12 +302,17 @@ async function dispatchPendingJobs() {
             // --- Verify Checkpoint Exists (if specified) ---
             let checkpointVerified = true; // Assume verified if no checkpoint is specified
             const requestedCheckpoint = job.generation_params?.checkpoint_name;
-            let exactForgeModelTitle = null; // Store the exact title if found
+            let exactForgeModelTitle = null;
 
             if (requestedCheckpoint) {
-                 // checkpointVerified = await verifyCheckpointExists(server.apiUrl, baseAxiosConfig, requestedCheckpoint);
-                 exactForgeModelTitle = await verifyCheckpointExists(server.apiUrl, baseAxiosConfig, requestedCheckpoint);
-                 // if (!checkpointVerified) {
+                 // Use the enhanced function that includes server alias
+                 exactForgeModelTitle = await verifyCheckpointExists(
+                    serverAlias,
+                    server.apiUrl, 
+                    baseAxiosConfig, 
+                    requestedCheckpoint
+                 );
+                 
                  if (!exactForgeModelTitle) {
                      // Job failed validation
                      const errorMsg = `Selected checkpoint '${requestedCheckpoint}' not found or accessible on Forge server.`;
@@ -214,7 +333,7 @@ async function dispatchPendingJobs() {
             const txt2imgUrl = `${server.apiUrl}/sdapi/v1/txt2img`;
             
             // --- Construct the final payload for the Forge API --- 
-            const finalPayload = { ...job.generation_params }; 
+            const finalPayload = { ...job.generation_params };
 
             // Check for checkpoint within the job's parameters and add override_settings
             // Use the exact title returned by the verification step if available
@@ -429,10 +548,12 @@ function stopDispatcher() {
     }
 }
 
-// Exports needed for app.js
+// Export the module functions
 module.exports = {
     startDispatcher,
     stopDispatcher,
+    dispatchPendingJobs,
+    verifyCheckpointExists,
     // Expose busyServers for potential use by the monitor to free up servers
     busyServers
 }; 

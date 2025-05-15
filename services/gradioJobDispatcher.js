@@ -32,8 +32,8 @@ function constructGenerationPayloadData(params, forgeInternalTaskId) {
     // We'll start with the 124 elements and then extend it
     const data = JSON.parse(String.raw`[
         "task(u1axq3memngtu5x)", 
-        "3 pretty girls",        
-        "dudes",                 
+        "",                      
+        "",                 
         [],                      
         1,                       
         1,                       
@@ -167,7 +167,7 @@ function constructGenerationPayloadData(params, forgeInternalTaskId) {
 
     // Apply parameters from the job to the HAR-based template
     data[0] = forgeInternalTaskId;
-    if (params.prompt !== undefined) data[1] = params.prompt;
+    if (params.positive_prompt !== undefined) data[1] = params.positive_prompt;
     if (params.negative_prompt !== undefined) data[2] = params.negative_prompt;
     if (params.styles !== undefined) data[3] = params.styles; // Array of strings
     if (params.batch_count !== undefined) data[4] = parseInt(params.batch_count, 10);
@@ -277,20 +277,73 @@ async function processJob(job) {
     }
 
     try {
-        // Skip the separate checkpoint setting call and directly include checkpoint name in the generation payload
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Including checkpoint '${checkpoint_name}' directly in generation payload`);
+        // APPROACH 1: Set the active checkpoint using the /sdapi/v1/options endpoint
+        const optionsPayload = {
+            sd_model_checkpoint: checkpoint_name
+        };
         
+        // Normalize checkpoint path (handle both forward and backslashes)
+        const normalizedCheckpoint = checkpoint_name.replace(/\//g, '\\');
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${checkpoint_name}', normalized to: '${normalizedCheckpoint}'`);
+        
+        // Use the normalized path
+        optionsPayload.sd_model_checkpoint = normalizedCheckpoint;
+        
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Setting active checkpoint to '${normalizedCheckpoint}' using /sdapi/v1/options API...`);
+        await axios.post(`${forgeBaseUrl}/sdapi/v1/options`, optionsPayload, axiosConfig);
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Active checkpoint set successfully via REST API.`);
+        
+        // APPROACH 2: Also include the checkpoint in the override_settings for the txt2img request
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Preparing generation request with override_settings for checkpoint '${checkpoint_name}'`);
+        
+        // Construct generation data array for Gradio API
         const generationDataArray = constructGenerationPayloadData(generation_params, forgeInternalTaskId);
+        
+        // Create the generation payload for the Gradio API
         const generationPayload = {
             data: generationDataArray,
             event_data: null,
             fn_index: 257, 
             session_hash: forge_session_hash,
-            trigger_id: 16 // ADDED from HAR analysis
+            trigger_id: 16
         };
         
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Submitting generation task with internal_task_id '${forgeInternalTaskId}'...`);
-        await axios.post(`${forgeBaseUrl}/queue/join`, generationPayload, axiosConfig); 
+        await axios.post(`${forgeBaseUrl}/queue/join`, generationPayload, axiosConfig);
+        
+        // APPROACH 3 (Direct API): Also attempt a direct txt2img API call with override_settings as backup
+        // This is optional if you want to ensure compatibility
+        try {
+            // Format the generation parameters for the REST API
+            const txt2imgPayload = {
+                prompt: generation_params.positive_prompt,
+                negative_prompt: generation_params.negative_prompt,
+                width: parseInt(generation_params.width) || 512,
+                height: parseInt(generation_params.height) || 512,
+                steps: parseInt(generation_params.steps) || 20,
+                cfg_scale: parseFloat(generation_params.cfg_scale) || 7,
+                sampler_name: generation_params.sampler_name || "Euler",
+                seed: parseInt(generation_params.seed) || -1,
+                // Include other generation parameters here
+                
+                // Override settings for the checkpoint
+                override_settings: {
+                    sd_model_checkpoint: normalizedCheckpoint
+                }
+            };
+            
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Also sending direct txt2img request with override_settings...`);
+            const txt2imgResponse = await axios.post(`${forgeBaseUrl}/sdapi/v1/txt2img`, txt2imgPayload, { ...axiosConfig, timeout: 120000 });
+            
+            if (txt2imgResponse.data && txt2imgResponse.data.images && txt2imgResponse.data.images.length > 0) {
+                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Direct txt2img API request succeeded with ${txt2imgResponse.data.images.length} images.`);
+                // Process the response if needed
+            }
+        } catch (txt2imgError) {
+            console.warn(`[Dispatcher] Job ${mobilesd_job_id}: Direct txt2img API attempt failed (non-critical): ${txt2imgError.message}`);
+            // Continue with normal flow since this was just an additional attempt
+        }
+        
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Generation task submitted successfully.`);
 
         await jobQueue.updateJob(mobilesd_job_id, {
@@ -339,7 +392,14 @@ async function pollForJobs() {
         return;
     }
     try {
-        const pendingJobs = await jobQueue.findPendingJobs(1); 
+        // Get recent pending jobs only (created within the last 24 hours)
+        const oneDayAgo = new Date();
+        oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+        const oneDayAgoISOString = oneDayAgo.toISOString();
+
+        // Modify to get only recent pending jobs
+        const pendingJobs = await jobQueue.findPendingJobs(1, oneDayAgoISOString); 
+        
         if (pendingJobs && pendingJobs.length > 0) {
             const jobToProcess = pendingJobs[0];
             console.log(`[Dispatcher] Poll: Found pending job ${jobToProcess.mobilesd_job_id}. Attempting to process.`);

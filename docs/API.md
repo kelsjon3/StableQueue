@@ -204,6 +204,117 @@ Gets a list of available model checkpoints.
 
 Gets a list of available LoRA models.
 
+## Models API (NEW)
+
+### GET /api/v1/models
+
+Gets a combined list of models (checkpoints and LoRAs) with metadata including base model information, preview URLs, and Civitai details when available.
+
+**Query Parameters:**
+- `type` (optional): Filter by model type ('checkpoint' or 'lora')
+- `baseModel` (optional): Filter by base model (e.g., 'SDXL', 'Pony', 'Flux.1 D', etc.)
+
+**Response:**
+```json
+{
+  "success": true,
+  "count": 35,
+  "models": [
+    {
+      "filename": "acornIsSpinningFLUX_aisf11H8stpChinfx.safetensors",
+      "relativePath": "/",
+      "created": "2024-05-01T12:30:45.000Z",
+      "modified": "2024-05-01T12:30:45.000Z",
+      "size": 7634221056,
+      "type": "checkpoint",
+      "baseModel": "Flux.1 D",
+      "preview_url": "/api/v1/models/acornIsSpinningFLUX_aisf11H8stpChinfx.safetensors/preview?type=checkpoint",
+      "civitai_url": "https://civitai.com/models/343221",
+      "civitai_id": 343221,
+      "description": "A model fine-tuned for realistic portraits with special focus on...",
+      "tags": ["portrait", "realistic", "flux"]
+    },
+    // Additional models...
+  ]
+}
+```
+
+### GET /api/v1/models/:id/info
+
+Gets detailed information about a specific model including its Civitai metadata (if available).
+
+**Query Parameters:**
+- `type` (optional): The model type ('checkpoint' or 'lora', defaults to 'checkpoint')
+
+**Response:**
+```json
+{
+  "success": true,
+  "model": {
+    "filename": "acornIsSpinningFLUX_aisf11H8stpChinfx.safetensors",
+    "relativePath": "/",
+    "created": "2024-05-01T12:30:45.000Z",
+    "modified": "2024-05-01T12:30:45.000Z",
+    "size": 7634221056,
+    "type": "checkpoint",
+    "baseModel": "Flux.1 D",
+    "civitai_id": 343221,
+    "model_version_id": 123456,
+    "civitai_name": "Acorn Is Spinning FLUX",
+    "description": "A detailed description of the model...",
+    "preview_images": [
+      "/api/v1/models/acornIsSpinningFLUX_aisf11H8stpChinfx.safetensors/preview?type=checkpoint&index=0",
+      "/api/v1/models/acornIsSpinningFLUX_aisf11H8stpChinfx.safetensors/preview?type=checkpoint&index=1"
+    ],
+    "tags": ["portrait", "realistic", "flux"],
+    "downloads": 5421,
+    "favorited": 342,
+    "rating": 4.8,
+    "trigger_words": ["acorn style", "acorn photograph"],
+    "metadata_source": "civitai_api"
+  }
+}
+```
+
+### GET /api/v1/models/:id/preview
+
+Serves the preview image for a model.
+
+**Query Parameters:**
+- `type` (optional): The model type ('checkpoint' or 'lora', defaults to 'checkpoint')
+- `index` (optional): If multiple preview images exist, request a specific one (defaults to 0)
+
+**Response:**
+The binary image data with appropriate content type header (image/jpeg, image/png, etc.)
+
+### POST /api/v1/models/:id/refresh-metadata
+
+Refreshes metadata for a model from Civitai. This endpoint will:
+1. Search for the model by ID if available, or by name
+2. Download model information and store it in Forge-compatible format
+3. Download preview images if available
+
+**Query Parameters:**
+- `type` (optional): The model type ('checkpoint' or 'lora', defaults to 'checkpoint')
+
+**Request Body:**
+No specific parameters required.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Metadata refreshed successfully",
+  "model": {
+    "filename": "acornIsSpinningFLUX_aisf11H8stpChinfx.safetensors",
+    "civitai_id": 343221,
+    "modelVersionId": 123456,
+    "previews": ["acornIsSpinningFLUX_aisf11H8stpChinfx.jpg", "acornIsSpinningFLUX_aisf11H8stpChinfx.preview.png"],
+    "update_timestamp": "2024-06-05T15:20:30.000Z"
+  }
+}
+```
+
 ## Civitai APIs
 
 ### GET /api/v1/civitai/image-info

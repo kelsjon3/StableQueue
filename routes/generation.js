@@ -2,9 +2,8 @@ const express = require('express');
 // const { v4: uuidv4 } = require('uuid'); // No longer needed here, job ID created by helper
 const jobQueue = require('../utils/jobQueueHelpers'); // Import the entire module
 const { readServersConfig } = require('../utils/configHelpers');
-// Remove axios and SSE related imports if they are no longer needed in this file
-// const axios = require('axios');
-// const { PassThrough } = require('stream'); 
+const axios = require('axios');
+const path = require('path');
 
 const router = express.Router();
 
@@ -323,5 +322,129 @@ router.get('/progress', async (req, res) => {
     });
 });
 */
+
+// POST /api/v1/checkpoint-verify - Test checkpoint matching
+router.post('/checkpoint-verify', async (req, res) => {
+    const { target_server_alias, checkpoint_name } = req.body;
+    
+    if (!target_server_alias || !checkpoint_name) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Server alias and checkpoint name are required' 
+        });
+    }
+    
+    try {
+        // Get server config
+        const serversConfig = await readServersConfig();
+        const server = serversConfig.find(s => s.alias === target_server_alias);
+        
+        if (!server) {
+            return res.status(404).json({ 
+                success: false, 
+                error: `Server ${target_server_alias} not found` 
+            });
+        }
+        
+        // Setup axios for the request
+        const axiosConfig = { timeout: 15000 };
+        if (server.auth && server.auth.enabled) {
+            axiosConfig.auth = {
+                username: server.auth.username,
+                password: server.auth.password
+            };
+        }
+        
+        // Get available models from server
+        const modelDB = require('../utils/modelDatabase');
+        
+        // Try fast local lookup first
+        const cachedModel = modelDB.findModelFast(checkpoint_name);
+        
+        // Get models from Forge server
+        const response = await axios.get(`${server.apiUrl}/sdapi/v1/sd-models`, axiosConfig);
+        
+        if (!response.data || !Array.isArray(response.data)) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Invalid response from Forge server' 
+            });
+        }
+        
+        // Import models into our database
+        modelDB.importModelsFromForge(response.data, 'checkpoint');
+        
+        // Attempt various matches
+        const models = response.data;
+        const normalizedForward = checkpoint_name.replace(/\\/g, '/');
+        const normalizedBackslash = checkpoint_name.replace(/\//g, '\\');
+        const filename = path.basename(checkpoint_name);
+        
+        // Exact title match
+        const exactMatch = models.find(m => m.title === checkpoint_name);
+        
+        // Forward slash match
+        const forwardSlashMatch = models.find(m => {
+            if (!m.title) return false;
+            const titleParts = m.title.split(' [');
+            const namePart = titleParts[0];
+            return namePart === normalizedForward;
+        });
+        
+        // Backslash match
+        const backslashMatch = models.find(m => {
+            if (!m.title) return false;
+            const titleParts = m.title.split(' [');
+            const namePart = titleParts[0];
+            return namePart === normalizedBackslash;
+        });
+        
+        // Filename match
+        const filenameMatch = models.find(m => {
+            if (!m.title) return false;
+            const titleParts = m.title.split(' [');
+            const namePart = titleParts[0];
+            return path.basename(namePart) === filename;
+        });
+        
+        // Get the best match
+        const bestMatch = exactMatch || forwardSlashMatch || backslashMatch || filenameMatch;
+        
+        // Try database lookup after import
+        const dbModel = modelDB.findModel(checkpoint_name, 'checkpoint');
+        
+        // Return detailed matching results
+        res.json({
+            success: true,
+            checkpoint_name,
+            server: target_server_alias,
+            cache_match: cachedModel ? {
+                id: cachedModel.id,
+                name: cachedModel.name,
+                forge_title: cachedModel.forgeTitle
+            } : null,
+            database_match: dbModel ? {
+                id: dbModel.id,
+                name: dbModel.name,
+                forge_format: dbModel.forge_format
+            } : null,
+            matching_results: {
+                exact_match: exactMatch?.title || null,
+                forward_slash_match: forwardSlashMatch?.title || null,
+                backslash_match: backslashMatch?.title || null,
+                filename_match: filenameMatch?.title || null
+            },
+            best_match: bestMatch?.title || null,
+            sample_available_models: models.slice(0, 5).map(m => m.title),
+            total_models_count: models.length
+        });
+    } catch (error) {
+        console.error('Checkpoint verification error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: `Checkpoint verification failed: ${error.message}` 
+        });
+    }
+});
 
 module.exports = router; 

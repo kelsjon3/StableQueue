@@ -10,6 +10,37 @@ const activeMonitors = {};
 
 const STABLE_DIFFUSION_SAVE_PATH = process.env.STABLE_DIFFUSION_SAVE_PATH || './outputs'; // Ensure this aligns with your Docker setup
 
+// Function to save a base64 image as a preview
+async function savePreviewImage(base64Data, job, isPreview = true) {
+    try {
+        if (!base64Data || !base64Data.startsWith('data:image')) {
+            return null;
+        }
+
+        // Extract the base64 data part (remove the data:image/png;base64, prefix)
+        const base64Content = base64Data.split(',')[1];
+        if (!base64Content) {
+            return null;
+        }
+
+        const imageBuffer = Buffer.from(base64Content, 'base64');
+        const saveDir = path.resolve(STABLE_DIFFUSION_SAVE_PATH);
+        await fs.mkdir(saveDir, { recursive: true });
+
+        // Create a filename based on job ID and time
+        const prefix = isPreview ? 'preview_' : '';
+        const filename = `${prefix}${job.mobilesd_job_id.substring(0,8)}_${Date.now()}.png`;
+        const savePath = path.join(saveDir, filename);
+
+        await fs.writeFile(savePath, imageBuffer);
+        console.log(`[Monitor] Job ${job.mobilesd_job_id}: ${isPreview ? 'Preview' : 'Image'} saved to ${savePath}`);
+        return filename;
+    } catch (error) {
+        console.error(`[Monitor] Job ${job.mobilesd_job_id}: Error saving ${isPreview ? 'preview' : 'image'} from base64:`, error.message);
+        return null;
+    }
+}
+
 async function downloadImage(imageUrl, job, filename) {
     try {
         const serverConfig = await getServerByAlias(job.target_server_alias);
@@ -318,6 +349,107 @@ async function handleProcessCompleted(job, eventData) {
     return processedSuccessfully;
 }
 
+async function handleProcessGenerating(job, eventData) {
+    // Get current percentage
+    const percentageMatch = eventData.msg.match(/([0-9.]+)%/);
+    let percentage = percentageMatch ? parseFloat(percentageMatch[1]) : null;
+    
+    // Fallback on looking at step info
+    if (!percentage && eventData.step !== undefined && eventData.total_steps !== undefined) {
+        percentage = (eventData.step / eventData.total_steps) * 100;
+    }
+    
+    // URGENT FIX: Make sure percentage is properly parsed from different message formats
+    if (!percentage && typeof eventData.msg === 'string') {
+        // Try to extract from various message formats
+        const stepMatch = eventData.msg.match(/Step (\d+)\/(\d+)/i);
+        if (stepMatch && stepMatch[1] && stepMatch[2]) {
+            const step = parseInt(stepMatch[1], 10);
+            const totalSteps = parseInt(stepMatch[2], 10);
+            if (!isNaN(step) && !isNaN(totalSteps) && totalSteps > 0) {
+                percentage = (step / totalSteps) * 100;
+                console.log(`[Monitor] Job ${job.mobilesd_job_id}: Extracted progress from step info: ${percentage.toFixed(1)}%`);
+            }
+        }
+    }
+
+    // Build a combined info object
+    const progressInfo = {
+        ...job.result_details,
+        progress_update: eventData,
+        progress_percentage: percentage || 0,
+        step: eventData.step,
+        total_steps: eventData.total_steps
+    };
+
+    // URGENT FIX: Always log progress updates for easier debugging
+    console.log(`[Monitor] Job ${job.mobilesd_job_id}: Progress update - ${percentage ? percentage.toFixed(1) + '%' : 'Unknown'} (Step ${eventData.step || '?'}/${eventData.total_steps || '?'})`);
+
+    if (eventData.output && typeof eventData.output === 'object') {
+        // Check for preview image in various possible locations
+        let previewImage = null;
+        if (eventData.output.image && typeof eventData.output.image === 'string' && eventData.output.image.startsWith('data:image')) {
+            // Direct base64 image
+            previewImage = await savePreviewImage(eventData.output.image, job);
+        } else if (eventData.output.preview && typeof eventData.output.preview === 'string' && eventData.output.preview.startsWith('data:image')) {
+            // Preview field with base64
+            previewImage = await savePreviewImage(eventData.output.preview, job);
+        } else if (eventData.output.data && Array.isArray(eventData.output.data) && eventData.output.data.length > 0) {
+            // For array data, check if we have any base64 images
+            for (const item of eventData.output.data) {
+                if (item && typeof item === 'string' && item.startsWith('data:image')) {
+                    previewImage = await savePreviewImage(item, job);
+                    break;
+                } else if (item && item.image && typeof item.image === 'string' && item.image.startsWith('data:image')) {
+                    previewImage = await savePreviewImage(item.image, job);
+                    break;
+                }
+            }
+        } else if (eventData.output.changed_state_ids && Array.isArray(eventData.output.changed_state_ids)) {
+            // For state IDs, also check for any base64 images
+            for (const state of eventData.output.changed_state_ids) {
+                if (state && typeof state === 'string' && state.startsWith('data:image')) {
+                    previewImage = await savePreviewImage(state, job);
+                    break;
+                } else if (state && state.image && typeof state.image === 'string' && state.image.startsWith('data:image')) {
+                    previewImage = await savePreviewImage(state.image, job);
+                    break;
+                }
+            }
+        }
+
+        if (previewImage) {
+            progressInfo.preview_image = previewImage;
+            console.log(`[Monitor] Job ${job.mobilesd_job_id}: New preview image saved: ${previewImage}`);
+        }
+    }
+
+    // URGENT FIX: Split the update calls to make progress update more reliable
+    try {
+        // First update just the progress percentage for quick UI updates
+        await jobQueue.updateJob(job.mobilesd_job_id, {
+            result_details: { 
+                progress_percentage: percentage || 0,
+            }
+        });
+        
+        // Then update the full progress info
+        const updatedJob = await jobQueue.updateJob(job.mobilesd_job_id, {
+            result_details: progressInfo
+        });
+        
+        // Update our in-memory job object to match
+        if (updatedJob) {
+            job.result_details = updatedJob.result_details;
+        }
+        
+        console.log(`[Monitor] Job ${job.mobilesd_job_id}: Successfully updated progress information`);
+    } catch (error) {
+        console.error(`[Monitor] Job ${job.mobilesd_job_id}: Error updating progress:`, error.message);
+    }
+    
+    return false; // Continue monitoring
+}
 
 async function startMonitoringJob(mobilesdJobId) {
     if (activeMonitors[mobilesdJobId]) {
@@ -355,7 +487,8 @@ async function startMonitoringJob(mobilesdJobId) {
     const monitorState = {
         lastImageEvent: null,
         processingImage: false,
-        hasCompletedProcessing: false
+        hasCompletedProcessing: false,
+        lastProgressValue: 0
     };
 
     const es = new EventSource(sseUrl, eventSourceInitDict);
@@ -367,7 +500,284 @@ async function startMonitoringJob(mobilesdJobId) {
 
     es.onmessage = async function(event) {
         try {
+            // URGENT FIX: Add extensive logging for all events to debug
+            const eventString = event.data.substring(0, 1000); // Limit length for logging
+            console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Received event: ${eventString}`);
+            
             const eventData = JSON.parse(event.data);
+            
+            // URGENT FIX: Always record the raw event data for debugging purposes
+            // This will help us understand what events we're receiving from Forge
+            await jobQueue.updateJob(job.mobilesd_job_id, {
+                result_details: { 
+                    ...job.result_details,
+                    last_event_msg: eventData.msg,
+                    last_event_time: new Date().toISOString(),
+                    last_event_type: eventData.msg || "unknown"
+                }
+            });
+            
+            // NEW FIX: Extract progress information from any event type
+            // This allows us to catch progress info even if we don't get process_generating events
+            const progressPercentage = getProgressFromEventData(eventData);
+            
+            if (progressPercentage !== null) {
+                console.log(`[Monitor] Job ${job.mobilesd_job_id}: Extracted progress: ${progressPercentage}%`);
+                
+                // Important: Update just the progress percentage immediately
+                await jobQueue.updateJob(job.mobilesd_job_id, {
+                    result_details: { 
+                        ...job.result_details,
+                        progress_percentage: progressPercentage
+                    }
+                });
+                
+                // If this isn't a process_generating event, we need to update the status to processing
+                // This ensures jobs don't get stuck in pending even if process_generating events aren't received
+                if (job.status !== 'processing') {
+                    console.log(`[Monitor] Job ${job.mobilesd_job_id}: Updating status to processing due to progress info`);
+                    await jobQueue.updateJob(job.mobilesd_job_id, {
+                        status: 'processing'
+                    });
+                }
+            }
+
+            // NEW FIX: Check for preview images in any event, not just process_generating
+            let previewFilename = await extractAndSavePreviewImage(eventData, job);
+            if (previewFilename) {
+                console.log(`[Monitor] Job ${job.mobilesd_job_id}: Found and saved preview image in event`);
+                
+                // Update the job with the preview image filename
+                await jobQueue.updateJob(job.mobilesd_job_id, {
+                    result_details: { 
+                        ...job.result_details,
+                        preview_image: previewFilename
+                    }
+                });
+            }
+
+            // Function to reliably extract progress from various event data formats
+            function getProgressFromEventData(data) {
+                // Try to find progress info from multiple sources
+                let percentage = null;
+                
+                // Log the event structure for debugging
+                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Event structure keys: ${Object.keys(data).join(', ')}`);
+                if (data.output) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Output keys: ${Object.keys(data.output).join(', ')}`);
+                }
+                
+                // IMPROVED DETECTION: Check direct progress field
+                if (data.progress && typeof data.progress === 'number') {
+                    percentage = Math.round(data.progress * 100);
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found progress in data.progress: ${percentage}%`);
+                }
+                // Check value.progress field
+                else if (data.value && typeof data.value.progress === 'number') {
+                    percentage = Math.round(data.value.progress * 100);
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found progress in data.value.progress: ${percentage}%`);
+                }
+                // Check for value object with percent field
+                else if (data.value && data.value.percent && typeof data.value.percent === 'number') {
+                    percentage = Math.round(data.value.percent * 100);
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found progress in data.value.percent: ${percentage}%`);
+                }
+                // Check for direct percent field
+                else if (data.percent && typeof data.percent === 'number') {
+                    percentage = Math.round(data.percent * 100);
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found progress in data.percent: ${percentage}%`);
+                }
+                // Check step/total_steps fields
+                else if (data.step !== undefined && data.total_steps !== undefined && 
+                         typeof data.step === 'number' && typeof data.total_steps === 'number' && 
+                         data.total_steps > 0) {
+                    percentage = Math.round((data.step / data.total_steps) * 100);
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Calculated progress from step/total_steps: ${percentage}%`);
+                }
+                // Check in output data for steps
+                else if (data.output && data.output.step !== undefined && data.output.total_steps !== undefined) {
+                    percentage = Math.round((data.output.step / data.output.total_steps) * 100);
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Calculated progress from output.step/total_steps: ${percentage}%`);
+                }
+                // Try to extract from message string if present
+                else if (data.msg && typeof data.msg === 'string') {
+                    // Try percentage pattern (e.g., "50%")
+                    const percentMatch = data.msg.match(/(\d+\.?\d*)%/);
+                    if (percentMatch && percentMatch[1]) {
+                        percentage = parseFloat(percentMatch[1]);
+                        console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Extracted progress from msg percentage: ${percentage}%`);
+                    }
+                    // Try step pattern (e.g., "Step 10/20")
+                    else {
+                        const stepMatch = data.msg.match(/[sS]tep\s+(\d+)\s*\/\s*(\d+)/i);
+                        if (stepMatch && stepMatch[1] && stepMatch[2]) {
+                            const step = parseInt(stepMatch[1], 10);
+                            const totalSteps = parseInt(stepMatch[2], 10);
+                            if (!isNaN(step) && !isNaN(totalSteps) && totalSteps > 0) {
+                                percentage = Math.round((step / totalSteps) * 100);
+                                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Extracted progress from msg step: ${percentage}%`);
+                            }
+                        }
+                    }
+                }
+                
+                // NEW FIX: Check inside nested output structures for progress info
+                if (percentage === null && data.output) {
+                    // Check in data array for progress info
+                    if (data.output.data && Array.isArray(data.output.data)) {
+                        for (let i = 0; i < data.output.data.length; i++) {
+                            if (typeof data.output.data[i] === 'string' && data.output.data[i].includes('%')) {
+                                const percentMatch = data.output.data[i].match(/(\d+\.?\d*)%/);
+                                if (percentMatch && percentMatch[1]) {
+                                    percentage = parseFloat(percentMatch[1]);
+                                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found progress in output.data[${i}]: ${percentage}%`);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                return percentage;
+            }
+
+            // Helper function to extract and save preview images from any event data
+            async function extractAndSavePreviewImage(data, job) {
+                // IMPROVED DETECTION: Look for preview images in more places
+                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Searching for preview image in event data`);
+                
+                // First check if there's a direct preview field at the top level
+                if (data.preview && typeof data.preview === 'string' && data.preview.startsWith('data:image')) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in top-level preview field`);
+                    return await savePreviewImage(data.preview, job);
+                }
+                
+                // Check if there's a direct image field at the top level
+                if (data.image && typeof data.image === 'string' && data.image.startsWith('data:image')) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in top-level image field`);
+                    return await savePreviewImage(data.image, job);
+                }
+                
+                // No preview if no output object
+                if (!data.output || typeof data.output !== 'object') {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: No output object found`);
+                    
+                    // Check in data.value as a fallback (some events use this structure)
+                    if (data.value && typeof data.value === 'object') {
+                        if (data.value.preview && typeof data.value.preview === 'string' && 
+                            data.value.preview.startsWith('data:image')) {
+                            console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in data.value.preview`);
+                            return await savePreviewImage(data.value.preview, job);
+                        }
+                    }
+                    
+                    return null;
+                }
+                
+                // Try all possible locations of preview images
+                const output = data.output;
+                
+                // Check common locations for preview images
+                if (output.image && typeof output.image === 'string' && output.image.startsWith('data:image')) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.image`);
+                    return await savePreviewImage(output.image, job);
+                }
+                
+                if (output.preview && typeof output.preview === 'string' && output.preview.startsWith('data:image')) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.preview`);
+                    return await savePreviewImage(output.preview, job);
+                }
+                
+                // Check within value object (common in progress events)
+                if (output.value && output.value.preview && typeof output.value.preview === 'string' && 
+                    output.value.preview.startsWith('data:image')) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.value.preview`);
+                    return await savePreviewImage(output.value.preview, job);
+                }
+                
+                // Direct value object check
+                if (output.value && typeof output.value === 'string' && output.value.startsWith('data:image')) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.value string`);
+                    return await savePreviewImage(output.value, job);
+                }
+                
+                // Check in data array if it exists
+                if (output.data && Array.isArray(output.data)) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Checking output.data array (length: ${output.data.length})`);
+                    
+                    // For base64 strings directly in array
+                    for (let i = 0; i < output.data.length; i++) {
+                        const item = output.data[i];
+                        
+                        if (typeof item === 'string' && item.startsWith('data:image')) {
+                            console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.data[${i}] string`);
+                            return await savePreviewImage(item, job);
+                        }
+                        
+                        // For objects with image property
+                        if (item && typeof item === 'object') {
+                            if (item.image && typeof item.image === 'string' && item.image.startsWith('data:image')) {
+                                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.data[${i}].image`);
+                                return await savePreviewImage(item.image, job);
+                            }
+                            
+                            if (item.preview && typeof item.preview === 'string' && item.preview.startsWith('data:image')) {
+                                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.data[${i}].preview`);
+                                return await savePreviewImage(item.preview, job);
+                            }
+                            
+                            // Deeper nested check
+                            if (item.data && typeof item.data === 'string' && item.data.startsWith('data:image')) {
+                                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.data[${i}].data`);
+                                return await savePreviewImage(item.data, job);
+                            }
+                            
+                            // Check for arrays within arrays (special case for some Forge versions)
+                            if (Array.isArray(item) && item.length > 0) {
+                                for (let j = 0; j < item.length; j++) {
+                                    const subitem = item[j];
+                                    
+                                    if (typeof subitem === 'string' && subitem.startsWith('data:image')) {
+                                        console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.data[${i}][${j}] string`);
+                                        return await savePreviewImage(subitem, job);
+                                    }
+                                    
+                                    if (subitem && typeof subitem === 'object') {
+                                        if (subitem.image && typeof subitem.image === 'string' && subitem.image.startsWith('data:image')) {
+                                            console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in output.data[${i}][${j}].image`);
+                                            return await savePreviewImage(subitem.image, job);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Check in changed_state_ids array if it exists
+                if (output.changed_state_ids && Array.isArray(output.changed_state_ids)) {
+                    console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Checking changed_state_ids array`);
+                    
+                    for (let i = 0; i < output.changed_state_ids.length; i++) {
+                        const item = output.changed_state_ids[i];
+                        
+                        if (typeof item === 'string' && item.startsWith('data:image')) {
+                            console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in changed_state_ids[${i}] string`);
+                            return await savePreviewImage(item, job);
+                        }
+                        
+                        if (item && typeof item === 'object' && item.image) {
+                            if (typeof item.image === 'string' && item.image.startsWith('data:image')) {
+                                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: Found preview image in changed_state_ids[${i}].image`);
+                                return await savePreviewImage(item.image, job);
+                            }
+                        }
+                    }
+                }
+                
+                console.log(`[Monitor][DEBUG] Job ${job.mobilesd_job_id}: No preview image found in event data`);
+                return null; // No preview image found
+            }
 
             switch (eventData.msg) {
                 case 'estimation':
@@ -376,15 +786,57 @@ async function startMonitoringJob(mobilesdJobId) {
                     });
                     break;
                 case 'progress':
+                    // Extract progress percentage from the event data
+                    let progressValue = 0;
+                    if (eventData.value && typeof eventData.value.progress === 'number') {
+                        progressValue = Math.round(eventData.value.progress * 100);
+                    } else if (eventData.progress && typeof eventData.progress === 'number') {
+                        progressValue = Math.round(eventData.progress * 100);
+                    }
+                    
+                    // Store progress in the job's result_details
                     await jobQueue.updateJob(job.mobilesd_job_id, {
-                        result_details: { ...job.result_details, progress_update: eventData }
+                        result_details: { 
+                            ...job.result_details, 
+                            progress_update: eventData,
+                            progress_percentage: progressValue
+                        }
                     });
+                    
+                    // Save progress percentage for potential use with preview images
+                    monitorState.lastProgressValue = progressValue;
+                    
+                    // Check if this progress event contains a preview image
+                    if (eventData.value && eventData.value.preview && typeof eventData.value.preview === 'string' && 
+                        eventData.value.preview.startsWith('data:image')) {
+                        console.log(`[Monitor] Job ${job.mobilesd_job_id}: Progress event contains a preview image`);
+                        
+                        // Save the preview image
+                        const previewFilename = await savePreviewImage(eventData.value.preview, job);
+                        if (previewFilename) {
+                            // Update the job with the preview image filename
+                            await jobQueue.updateJob(job.mobilesd_job_id, {
+                                result_details: { 
+                                    ...job.result_details, 
+                                    preview_image: previewFilename,
+                                    progress_percentage: progressValue
+                                }
+                            });
+                        }
+                    }
                     break;
                 case 'process_starts':
                     console.log(`[Monitor] Job ${job.mobilesd_job_id}: Forge process starting.`);
                     await jobQueue.updateJob(job.mobilesd_job_id, {
                         result_details: { ...job.result_details, info: 'Forge image generation process started.' }
                     });
+                    break;
+                case 'process_generating':
+                    // Call the dedicated handler function for process_generating events
+                    const shouldCloseMonitor = await handleProcessGenerating(job, eventData);
+                    if (shouldCloseMonitor) {
+                        closeMonitor(job.mobilesd_job_id, 'Process generating handler requested close');
+                    }
                     break;
                 case 'process_completed':
                     try {
@@ -531,7 +983,7 @@ async function reinitializeMonitoring() {
 
 module.exports = {
     startMonitoringJob,
-    closeMonitor, // Might be useful if a job is cancelled
+    closeMonitor,
     reinitializeMonitoring,
-    getActiveMonitors: () => activeMonitors // Add a function to access activeMonitors for debugging
+    getActiveMonitors: () => activeMonitors
 }; 

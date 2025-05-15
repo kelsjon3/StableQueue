@@ -1,0 +1,6 @@
+node_modules
+.git
+.env
+*.tar
+*.log
+data/*.sqlite-journal # Ignore sqlite temporary files 
