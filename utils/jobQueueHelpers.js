@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     completion_timestamp TEXT,
     target_server_alias TEXT NOT NULL,
     forge_session_hash TEXT,
-    forge_internal_task_id TEXT,
     generation_params_json TEXT NOT NULL,
     result_details_json TEXT,
     retry_count INTEGER DEFAULT 0
@@ -37,6 +36,19 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status_creation ON jobs (status, creation_timestamp);
 `;
 db.exec(schema);
+
+// Check if forge_internal_task_id column exists, and add it if not
+const checkColumn = db.prepare("PRAGMA table_info(jobs)").all();
+const hasInternalTaskIdColumn = checkColumn.some(col => col.name === 'forge_internal_task_id');
+if (!hasInternalTaskIdColumn) {
+    console.log("Adding forge_internal_task_id column to jobs table");
+    try {
+        db.exec("ALTER TABLE jobs ADD COLUMN forge_internal_task_id TEXT;");
+        console.log("Successfully added forge_internal_task_id column");
+    } catch (error) {
+        console.error("Failed to add forge_internal_task_id column:", error);
+    }
+}
 
 // --- Helper Functions ---
 
@@ -58,25 +70,28 @@ function addJob(jobData) {
         completion_timestamp: null,
         target_server_alias: jobData.target_server_alias,
         forge_session_hash: null,
-        forge_internal_task_id: null,
         generation_params_json: JSON.stringify(jobData.generation_params || {}),
         result_details_json: null,
         retry_count: 0
     };
 
-    const stmt = db.prepare(
-        'INSERT INTO jobs ('
-        + 'mobilesd_job_id, status, creation_timestamp, last_updated_timestamp, ' 
-        + 'completion_timestamp, target_server_alias, forge_session_hash, forge_internal_task_id,'
-        + 'generation_params_json, result_details_json, retry_count'
-        + ') VALUES ('
-        + '@mobilesd_job_id, @status, @creation_timestamp, @last_updated_timestamp,'
-        + '@completion_timestamp, @target_server_alias, @forge_session_hash, @forge_internal_task_id,'
-        + '@generation_params_json, @result_details_json, @retry_count'
-        + ')'
-    );
+    // Check if forge_internal_task_id column exists
+    const checkColumn = db.prepare("PRAGMA table_info(jobs)").all();
+    const hasInternalTaskIdColumn = checkColumn.some(col => col.name === 'forge_internal_task_id');
+    
+    // Only add forge_internal_task_id if the column exists
+    if (hasInternalTaskIdColumn) {
+        jobRecord.forge_internal_task_id = null;
+    }
 
+    // Dynamically build INSERT statement based on existing columns
+    const columnNames = Object.keys(jobRecord).join(', ');
+    const placeholders = Object.keys(jobRecord).map(key => `@${key}`).join(', ');
+    
+    const insertSql = `INSERT INTO jobs (${columnNames}) VALUES (${placeholders})`;
+    
     try {
+        const stmt = db.prepare(insertSql);
         stmt.run(jobRecord);
         return jobRecord;
     } catch (error) {
@@ -95,10 +110,28 @@ function getJobById(mobilesdJobId) {
     const row = stmt.get(mobilesdJobId);
 
     if (row) {
+        // Parse JSON fields
+        const generationParams = JSON.parse(row.generation_params_json || '{}');
+        const resultDetails = row.result_details_json ? JSON.parse(row.result_details_json) : null;
+        
+        // Check if forge_internal_task_id column exists
+        const hasColumn = db.prepare("PRAGMA table_info(jobs)")
+            .all()
+            .some(col => col.name === 'forge_internal_task_id');
+        
+        // If the column doesn't exist in the database but the task ID is stored in result_details,
+        // add it to the job object for compatibility
+        let forgeInternalTaskId = null;
+        if (hasColumn && row.forge_internal_task_id) {
+            forgeInternalTaskId = row.forge_internal_task_id;
+        } else if (resultDetails && resultDetails.forge_internal_task_id) {
+            forgeInternalTaskId = resultDetails.forge_internal_task_id;
+        }
+        
         return {
             ...row,
-            generation_params: JSON.parse(row.generation_params_json || '{}'),
-            result_details: row.result_details_json ? JSON.parse(row.result_details_json) : null,
+            generation_params: generationParams,
+            result_details: resultDetails,
             // Ensure all fields are present, even if null from DB
             mobilesd_job_id: row.mobilesd_job_id,
             status: row.status,
@@ -107,7 +140,7 @@ function getJobById(mobilesdJobId) {
             completion_timestamp: row.completion_timestamp,
             target_server_alias: row.target_server_alias,
             forge_session_hash: row.forge_session_hash,
-            forge_internal_task_id: row.forge_internal_task_id,
+            forge_internal_task_id: forgeInternalTaskId,
             retry_count: row.retry_count
         };
     }
@@ -139,11 +172,37 @@ function updateJob(mobilesdJobId, updates) {
         delete updateFields.result_details;
     }
     
+    // Check if forge_internal_task_id column exists
+    const checkColumn = db.prepare("PRAGMA table_info(jobs)").all();
+    const hasInternalTaskIdColumn = checkColumn.some(col => col.name === 'forge_internal_task_id');
+    
+    // If trying to update forge_internal_task_id but the column doesn't exist, store it in result_details instead
+    if (updateFields.hasOwnProperty('forge_internal_task_id') && !hasInternalTaskIdColumn) {
+        console.log(`Column forge_internal_task_id doesn't exist, storing task ID in result_details instead`);
+        // Get existing result_details
+        const existingDetails = jobExists.result_details || {};
+        const updatedDetails = {
+            ...existingDetails,
+            forge_internal_task_id: updateFields.forge_internal_task_id
+        };
+        
+        // Update result_details_json with the task ID
+        updateFields.result_details_json = JSON.stringify(updatedDetails);
+        
+        // Remove forge_internal_task_id from updates since it doesn't exist as a column
+        delete updateFields.forge_internal_task_id;
+    }
+    
     const allowedColumns = [
         'status', 'last_updated_timestamp', 'completion_timestamp', 
-        'forge_session_hash', 'forge_internal_task_id', 'generation_params_json', 'result_details_json', 
+        'forge_session_hash', 'generation_params_json', 'result_details_json', 
         'retry_count'
     ];
+    
+    // Only include forge_internal_task_id in allowed columns if it exists
+    if (hasInternalTaskIdColumn) {
+        allowedColumns.push('forge_internal_task_id');
+    }
     
     const setClauses = [];
     const values = {};
