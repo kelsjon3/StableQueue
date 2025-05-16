@@ -383,10 +383,38 @@ function cancelJob(mobilesdJobId) {
     });
 }
 
+/**
+ * Updates only the result_details field for a job.
+ * @param {string} mobilesdJobId - The ID of the job to update
+ * @param {object} resultDetails - Object to merge with existing result_details
+ * @returns {object|null} The updated job object or null if the job was not found
+ */
+function updateJobResult(mobilesdJobId, resultDetails) {
+    // Get the current job to access its existing result_details
+    const currentJob = getJobById(mobilesdJobId);
+    if (!currentJob) {
+        console.warn(`Cannot update result details for non-existent job: ${mobilesdJobId}`);
+        return null;
+    }
+    
+    // Merge the new result details with existing ones
+    const updatedResultDetails = {
+        ...(currentJob.result_details || {}),
+        ...resultDetails
+    };
+    
+    // Use the main updateJob function to update the job
+    return updateJob(mobilesdJobId, {
+        result_details: updatedResultDetails,
+        last_updated_timestamp: new Date().toISOString()
+    });
+}
+
 module.exports = {
     addJob,
     getJobById,
     updateJob,
+    updateJobResult,
     findPendingJobs,
     getJobsByStatus,
     readJobQueue,
@@ -396,5 +424,6 @@ module.exports = {
     updateJobInQueue,
     getAllJobs,
     deleteJob,
-    cancelJob
+    cancelJob,
+    closeDB: () => db.close() // Add a function to close the database connection
 }; 

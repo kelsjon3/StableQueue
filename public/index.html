@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MobileSD Interface</title>
     <link rel="stylesheet" href="css/style.css">
+    <!-- Socket.io client library -->
+    <script src="/socket.io/socket.io.js"></script>
+    <!-- MobileSD Job Status Client -->
+    <script src="js/jobStatusClient.js"></script>
 </head>
 <body>
     <header>
@@ -327,6 +331,14 @@
                      <div class="form-group">
                          <label for="server-api-url">API URL (e.g., http://host:port):</label>
                          <input type="url" id="server-api-url" required>
+                     </div>
+                     <div class="form-group">
+                         <label for="server-model-root-path">Model Root Path:</label>
+                         <div class="input-with-button">
+                            <input type="text" id="server-model-root-path" placeholder="Path to models directory">
+                            <button type="button" id="browse-model-path-btn" class="secondary-button">Browse...</button>
+                         </div>
+                         <small>Base directory where your model folders (Stable-diffusion, Lora, etc.) are located.</small>
                      </div>
                      <div class="form-group">
                          <label>Authentication (Basic Auth):</label>

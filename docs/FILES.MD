@@ -24,7 +24,15 @@ This document outlines the main files and directories in the MobileSD project.
     *   `generation.js`: API endpoints for image generation and job status retrieval.
 *   `services/`: Backend services for job processing and monitoring.
     *   `gradioJobDispatcher.js`: Service responsible for processing pending jobs from the SQLite database queue. It connects to the Forge server using the Gradio API (`/queue/join`), sets the checkpoint model, submits generation tasks, and updates job status in the database. Includes path normalization for cross-platform compatibility (forward/backslashes).
-    *   `forgeJobMonitor.js`: Service that monitors active Forge jobs via Server-Sent Events, downloads completed images, and updates job status.
+    *   `forgeJobMonitor.js`: Service that monitors active Forge jobs, implemented with:
+        *   Server-Sent Events (SSE) connection to track job progress in real-time
+        *   Active polling of the `/internal/progress` endpoint to supplement SSE events
+        *   Comprehensive image preview extraction from multiple sources
+        *   De-duplication logic to prevent multiple copies of the same image
+        *   Advanced logging with directional indicators (FORGE→SERVER, SERVER→CLIENT)
+        *   Artificial progress updates for improved UI responsiveness
+        *   Automated image downloading and metadata extraction
+        *   Multiple fallback strategies to ensure job completion
     *   `dispatcher.js`: Legacy service (deprecated) that used the synchronous Forge API approach.
 *   `utils/`: Utility functions shared across the backend.
     *   `configHelpers.js`: Helpers for reading/writing `servers.json` and scanning model directories.

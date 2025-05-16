@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const serverApiUrlInput = document.getElementById('server-api-url');
     const serverAuthUserInput = document.getElementById('server-auth-user');
     const serverAuthPassInput = document.getElementById('server-auth-pass');
+    const serverModelRootPathInput = document.getElementById('server-model-root-path');
+    const browseModelPathBtn = document.getElementById('browse-model-path-btn');
     const editAliasInput = document.getElementById('edit-alias'); // Hidden field for editing
     const saveServerBtn = document.getElementById('save-server-btn');
     const cancelEditBtn = document.getElementById('cancel-edit-btn');
@@ -95,6 +97,302 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentEventSource = null; // To keep track of the active SSE connection
     let allModels = []; // Cache for all models
     let baseModelsList = []; // List of unique base models for filter
+    let currentJobId = null; // Track the current job ID for the progress display
+    let currentJob = null; // Track the current job object
+    let jobClient = null; // Will hold the WebSocket client for job updates
+
+    // Initialize the WebSocket client for real-time job updates
+    function initializeJobClient() {
+        console.log('Initializing job status WebSocket client...');
+        
+        // Create a new instance of MobileSdJobClient
+        jobClient = new MobileSdJobClient({
+            autoReconnect: true
+        });
+
+        // Subscribe to job updates
+        jobClient.onConnect(() => {
+            console.log('Connected to job status WebSocket server successfully');
+            
+            // Debug: Log the current state of the socket
+            if (jobClient.socket) {
+                console.log('Socket state:', {
+                    id: jobClient.socket.id,
+                    connected: jobClient.socket.connected,
+                    disconnected: jobClient.socket.disconnected
+                });
+            }
+        });
+
+        jobClient.onDisconnect(() => {
+            console.log('Disconnected from job status WebSocket server');
+        });
+
+        // Handle initial jobs load
+        jobClient.onInitialJobs(jobs => {
+            console.log(`Received ${jobs.length} jobs from WebSocket server`);
+            console.log('Job statuses:', jobs.map(job => ({ id: job.mobilesd_job_id, status: job.status })));
+            
+            // Update queue UI if we're on that page
+            if (document.getElementById('queue-view').style.display !== 'none') {
+                displayQueueJobs(jobs);
+            }
+            
+            // If we have a current job in progress, check if it's updated
+            if (currentJobId) {
+                const updatedJob = jobs.find(job => job.mobilesd_job_id === currentJobId);
+                if (updatedJob) {
+                    currentJob = updatedJob;
+                    updateProgressUI(updatedJob);
+                }
+            }
+        });
+
+        // Handle job updates
+        jobClient.onJobUpdate(job => {
+            console.log(`Job ${job.mobilesd_job_id} updated: ${job.status}`);
+            
+            // Debug: Log more details about the updated job
+            console.log('Updated job details:', {
+                id: job.mobilesd_job_id,
+                status: job.status,
+                hasResultDetails: !!job.result_details,
+                progress: job.result_details?.progress_percentage,
+                hasPreview: !!job.result_details?.preview_image,
+                hasCompletedImages: !!(job.result_details?.saved_filenames && job.result_details?.saved_filenames.length > 0)
+            });
+            
+            // Update queue row if this job is in the queue
+            updateQueueJobRow(job);
+            
+            // If this is our current job, update the progress UI
+            if (currentJobId && job.mobilesd_job_id === currentJobId) {
+                currentJob = job;
+                updateProgressUI(job);
+                
+                // If the job is complete, display the results
+                if (job.status === 'completed' && job.result_details) {
+                    // Log that we're about to display completed job images
+                    console.log('Job completed, displaying results:', job.mobilesd_job_id);
+                    console.log('Result details available:', !!job.result_details);
+                    console.log('Saved filenames:', job.result_details?.saved_filenames);
+                    console.log('Legacy images field:', job.result_details?.images);
+                    displayCompletedJobImages(job);
+                }
+            }
+        });
+
+        // Handle progress updates with improved image preview
+        jobClient.onJobProgress(progressData => {
+            const { jobId, progress_percentage, preview_image } = progressData;
+            console.log(`Job progress update: Job ${jobId} at ${progress_percentage}% complete, preview: ${preview_image || 'none'}`);
+            
+            try {
+                // First, see if we have this job in the job table
+                const table = document.getElementById('job-queue-table');
+                if (table) {
+                    let row = [...table.querySelectorAll('tr')].find(row => {
+                        const idCell = row.querySelector('.job-id');
+                        return idCell && idCell.textContent.trim() === jobId;
+                    });
+                    
+                    if (row) {
+                        // We have this job in the UI - let's update it with progress info
+                        
+                        // Update the status cell if needed
+                        const statusCell = row.querySelector('.job-status');
+                        if (statusCell && !statusCell.classList.contains('job-status-processing')) {
+                            statusCell.textContent = 'processing';
+                            statusCell.className = 'job-status job-status-processing';
+                        }
+                        
+                        // Add or update progress bar
+                        let progressContainer = row.querySelector('.job-progress-container');
+                        if (!progressContainer) {
+                            // No progress bar yet - add one to the row
+                            const progressCell = row.querySelector('td:nth-child(2)'); // Status column
+                            if (progressCell) {
+                                const progressHtml = `
+                                    <div class="job-progress-container">
+                                        <div class="job-progress-bar">
+                                            <div class="job-progress-bar-fill" style="width: ${progress_percentage}%"></div>
+                                        </div>
+                                        <div class="job-progress-text">${progress_percentage.toFixed(1)}%</div>
+                                    </div>
+                                `;
+                                progressCell.innerHTML = `<span class="job-status job-status-processing">processing</span>${progressHtml}`;
+                            }
+                        } else {
+                            // Update existing progress bar
+                            const fillBar = progressContainer.querySelector('.job-progress-bar-fill');
+                            const progressText = progressContainer.querySelector('.job-progress-text');
+                            if (fillBar) fillBar.style.width = `${progress_percentage}%`;
+                            if (progressText) progressText.textContent = `${progress_percentage.toFixed(1)}%`;
+                        }
+                        
+                        // Display preview image if available
+                        if (preview_image && preview_image.length > 0) {
+                            let previewImg = row.querySelector('.job-preview-image');
+                            if (!previewImg) {
+                                // If there was no preview before but now there is, add it
+                                const progressCell = row.querySelector('td:nth-child(2)'); // Status column
+                                if (progressCell) {
+                                    const previewHtml = `
+                                        <div class="job-preview-container">
+                                            <img class="job-preview-image" src="/outputs/${preview_image}?t=${Date.now()}" alt="Preview">
+                                        </div>
+                                    `;
+                                    progressCell.innerHTML += previewHtml;
+                                }
+                            } else {
+                                // Update existing preview image with cache-busting
+                                previewImg.src = `/outputs/${preview_image}?t=${Date.now()}`;
+                            }
+                        }
+                    }
+                }
+                
+                // Now handle current job progress UI update
+                if (jobId === currentJobId) {
+                    // Update progress bar
+                    if (progressBar) {
+                        progressBar.value = progress_percentage;
+                        progressText.textContent = `Processing: ${progress_percentage.toFixed(1)}%`;
+                    }
+                    
+                    // Update preview image if available
+                    if (preview_image && preview_image.length > 0 && progressImagePreview) {
+                        console.log(`Updating progress image preview with: ${preview_image}`);
+                        progressImagePreview.src = `/outputs/${preview_image}?t=${Date.now()}`;
+                        progressImagePreview.style.display = 'block';
+                    }
+                }
+            } catch (err) {
+                console.error('Error updating job progress in UI:', err);
+            }
+        });
+        
+        console.log('Job status WebSocket client initialization complete');
+    }
+
+    // Function to update the progress UI based on job status
+    function updateProgressUI(job) {
+        if (!job) return;
+        
+        const status = job.status;
+        
+        // Update progress elements based on status
+        if (progressBar && progressText) {
+            switch (status) {
+                case 'pending':
+                    progressBar.value = 0;
+                    progressText.textContent = 'Pending: Waiting to start...';
+                    progressImagePreview.style.display = 'none';
+                    break;
+                    
+                case 'processing':
+                    // Get progress from result_details if available
+                    const progress = job.result_details && job.result_details.progress_percentage 
+                        ? job.result_details.progress_percentage 
+                        : 0;
+                    
+                    progressBar.value = progress;
+                    progressText.textContent = `Processing: ${progress}%`;
+                    
+                    // Check for preview image
+                    if (job.result_details && job.result_details.preview_image) {
+                        progressImagePreview.src = `/outputs/${job.result_details.preview_image}`;
+                        progressImagePreview.style.display = 'block';
+                    }
+                    break;
+                    
+                case 'completed':
+                    progressBar.value = 100;
+                    progressText.textContent = 'Completed';
+                    break;
+                    
+                case 'failed':
+                    progressBar.value = 0;
+                    progressText.textContent = `Failed: ${job.result_details && job.result_details.error 
+                        ? job.result_details.error 
+                        : 'Unknown error'}`;
+                    break;
+                    
+                case 'cancelled':
+                    progressBar.value = 0;
+                    progressText.textContent = 'Cancelled';
+                    break;
+                    
+                default:
+                    progressBar.value = 0;
+                    progressText.textContent = `Unknown status: ${status}`;
+            }
+        }
+    }
+
+    // Function to update a job row in the queue table
+    function updateQueueJobRow(job) {
+        // Only update if we're on the queue page
+        if (document.getElementById('queue-view').style.display === 'none') return;
+        
+        // Check if the row exists already
+        const existingRow = document.getElementById(`job-row-${job.mobilesd_job_id}`);
+        
+        if (existingRow) {
+            // Update the status badge
+            const statusCell = existingRow.querySelector('td:nth-child(2)');
+            if (statusCell) {
+                // Clear the status cell contents
+                const statusBadge = `<span class="job-status job-status-${job.status.toLowerCase()}">${job.status}</span>`;
+                
+                // Check if we have a progress percentage for 'processing' jobs
+                let progressHtml = '';
+                let previewHtml = '';
+                
+                if (job.status === 'processing') {
+                    // IMPORTANT: Always include progress bar for processing jobs, even if percentage is 0
+                    // Use progress_percentage if available, otherwise default to 0
+                    const progressPercentage = job.result_details?.progress_percentage || 0;
+                    progressHtml = `
+                        <div class="job-progress-container">
+                            <div class="job-progress-bar">
+                                <div class="job-progress-bar-fill" style="width: ${progressPercentage}%"></div>
+                            </div>
+                            <div class="job-progress-text">${progressPercentage.toFixed(1)}%</div>
+                        </div>
+                    `;
+                    
+                    // Add preview image if available
+                    if (job.result_details && job.result_details.preview_image) {
+                        previewHtml = `
+                            <div style="margin-top: 0.5rem;">
+                            <img src="/outputs/${job.result_details.preview_image}?t=${Date.now()}" 
+                                     alt="Preview" 
+                                     class="job-preview-image"
+                                     loading="lazy">
+                            </div>
+                        `;
+                    }
+                }
+                
+                // Update the status cell with all components
+                statusCell.innerHTML = `
+                    ${statusBadge}
+                    ${progressHtml}
+                    ${previewHtml}
+                `;
+            }
+            
+            // If we're filtering by status, hide/show based on filter
+            const currentFilter = queueStatusFilter.value;
+            if (currentFilter && currentFilter !== '') {
+                existingRow.style.display = job.status.toLowerCase() === currentFilter.toLowerCase() ? '' : 'none';
+            }
+        } else {
+            // Row doesn't exist, refresh the queue
+            loadQueueJobs();
+        }
+    }
 
     async function fetchAndPopulateServers() {
         if (!serverAliasSelect) {
@@ -219,7 +517,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     listItem.innerHTML = `
                         <strong>Alias:</strong> ${server.alias}<br>
                         <strong>URL:</strong> ${server.apiUrl}<br>
-                        <strong>Auth:</strong> ${server.authUser ? 'Username/Password' : 'None'}
+                        <strong>Auth:</strong> ${server.authUser ? 'Username/Password' : 'None'}<br>
+                        <strong>Model Root:</strong> ${server.modelRootPath || '<not set>'}
                         <div class="server-actions">
                             <button class="edit-server-btn" data-alias="${server.alias}">Edit</button>
                             <button class="delete-server-btn" data-alias="${server.alias}">Delete</button>
@@ -256,6 +555,7 @@ document.addEventListener('DOMContentLoaded', () => {
         serverApiUrlInput.value = serverToEdit.apiUrl;
         serverAuthUserInput.value = serverToEdit.authUser || '';
         serverAuthPassInput.value = serverToEdit.authPass || '';
+        serverModelRootPathInput.value = serverToEdit.modelRootPath || '';
         editAliasInput.value = serverToEdit.alias; // Set the original alias for update reference
 
         saveServerBtn.textContent = 'Update Server';
@@ -312,6 +612,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const apiUrl = serverApiUrlInput.value.trim();
             const authUser = serverAuthUserInput.value.trim();
             const authPass = serverAuthPassInput.value.trim();
+            const modelRootPath = serverModelRootPathInput.value.trim();
             const originalAliasForUpdate = editAliasInput.value; // Original alias if in edit mode
 
             if (!alias || !apiUrl) {
@@ -324,6 +625,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 apiUrl,
                 ...(authUser && { authUser }),
                 ...(authPass && { authPass }),
+                modelRootPath,
             };
 
             let method = 'POST';
@@ -356,6 +658,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error(`Error ${originalAliasForUpdate ? 'updating' : 'saving'} server:`, error);
                 alert(`Error ${originalAliasForUpdate ? 'updating' : 'saving'} server: ${error.message}`);
             }
+        });
+    }
+
+    // Handle model root path browse button
+    if (browseModelPathBtn) {
+        browseModelPathBtn.addEventListener('click', () => {
+            // We can't actually open a native file browser without a server-side component
+            // Instead, show a dialog with instructions
+            alert('Enter the full path to your models folder, for example:\n\n' +
+                'On Windows: C:\\models or D:\\stable-diffusion\\models\n' +
+                'On Linux: /home/user/models or /mnt/user/models\n\n' +
+                'This should be the folder that contains subdirectories like "Stable-diffusion", "Lora", etc.');
         });
     }
 
@@ -497,169 +811,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- GENERATOR PAGE LOGIC ---
 
-    // Function to poll job status and update UI
-    async function pollJobStatus(jobId) {
-        if (!jobId) {
-            return false;
-        }
-
-        try {
-            const response = await fetch(`/api/v1/queue/jobs/${jobId}/status`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const jobStatus = await response.json();
-            const status = jobStatus.status; // Could be 'pending', 'processing', 'completed', 'failed'
-            
-            // Update the progress area
-            if (progressText) {
-                if (status === 'pending') {
-                    progressText.innerText = `Job is pending in queue. Job ID: ${jobId}`;
-                    progressBar.value = 10; // Arbitrary low value to show pending
-                } else if (status === 'processing') {
-                    // NEW: Extract progress percentage from result_details if available
-                    const progressPercentage = jobStatus.result_details?.progress_percentage || 0;
-                    progressText.innerText = `Job is being processed by Forge (${progressPercentage.toFixed(1)}%). Job ID: ${jobId}`;
-                    
-                    // NEW: Update progress bar with actual percentage value
-                    progressBar.value = progressPercentage;
-                    
-                    // NEW: Display preview image if available
-                    if (jobStatus.result_details?.preview_image && outputImageContainer) {
-                        // Check if we already have this preview displayed
-                        const existingPreview = outputImageContainer.querySelector(`[data-preview="${jobStatus.result_details.preview_image}"]`);
-                        
-                        if (!existingPreview) {
-                            // Clear container first if needed
-                            if (outputImageContainer.innerHTML.includes('No preview available')) {
-                                outputImageContainer.innerHTML = '';
-                            }
-                            
-                            // Create and append the preview image
-                            const previewImg = document.createElement('img');
-                            previewImg.src = `/outputs/${jobStatus.result_details.preview_image}?t=${Date.now()}`; // Add timestamp to avoid caching
-                            previewImg.className = 'preview-image';
-                            previewImg.alt = 'Generation preview';
-                            previewImg.dataset.preview = jobStatus.result_details.preview_image;
-                            
-                            outputImageContainer.innerHTML = '';
-                            outputImageContainer.appendChild(previewImg);
-                            
-                            // Add caption below the image
-                            const caption = document.createElement('p');
-                            caption.className = 'preview-caption';
-                            caption.textContent = `Preview: ${progressPercentage.toFixed(1)}% complete`;
-                            outputImageContainer.appendChild(caption);
-                        }
-                    } else if (!outputImageContainer.querySelector('img') && outputImageContainer) {
-                        // Show "no preview" message if we don't have one yet
-                        outputImageContainer.innerHTML = '<p>No preview available yet...</p>';
-                    }
-                } else if (status === 'completed') {
-                    progressText.innerText = `Job completed successfully. Job ID: ${jobId}`;
-                    progressBar.value = 100;
-                    
-                    // Process completed job - display images
-                    displayCompletedJobImages(jobStatus);
-                    
-                    return false; // Stop polling
-                } else if (status === 'failed') {
-                    progressText.innerText = `Job failed: ${jobStatus.result_details?.error || 'Unknown error'}`;
-                    progressBar.value = 0;
-                    
-                    // Display error details in output area
-                    outputInfo.innerHTML = `<div class="error-message">
-                        <h3>Error</h3>
-                        <p>${jobStatus.result_details?.error || 'Unknown error'}</p>
-                        ${jobStatus.result_details?.details ? `<p>Details: ${jobStatus.result_details.details}</p>` : ''}
-                    </div>`;
-                    
-                    return false; // Stop polling
-                }
-            }
-            
-            return true; // Continue polling
-        } catch (error) {
-            console.error('Error polling job status:', error);
-            progressText.innerText = `Error checking job status: ${error.message}`;
-            return false; // Stop polling on error
-        }
-    }
-
-    // Function to display completed job images in the output area
-    function displayCompletedJobImages(jobStatus) {
-        if (!outputImageContainer || !outputInfo) return;
-        
-        // Clear previous output
-        outputImageContainer.innerHTML = '';
-        outputInfo.innerHTML = '';
-        
-        const resultDetails = jobStatus.result_details;
-        
-        if (!resultDetails || !resultDetails.images || !resultDetails.images.length) {
-            outputInfo.innerHTML = '<div class="warning-message">Job completed but no images were found.</div>';
-            return;
-        }
-        
-        // Create a gallery of images
-        resultDetails.images.forEach(filename => {
-            const imageWrapper = document.createElement('div');
-            imageWrapper.className = 'output-image-wrapper';
-            
-            const img = document.createElement('img');
-            img.src = `/outputs/${filename}`;
-            img.alt = filename;
-            img.loading = 'lazy';
-            img.onclick = () => {
-                // Navigate to gallery tab and open this image
-                showView('gallery-view', 'nav-gallery');
-                loadGalleryImages().then(() => {
-                    // Small delay to ensure gallery is loaded
-                    setTimeout(() => {
-                        openImageViewer(filename);
-                    }, 500);
-                });
-            };
-            
-            const caption = document.createElement('div');
-            caption.className = 'image-caption';
-            caption.textContent = filename;
-            
-            imageWrapper.appendChild(img);
-            imageWrapper.appendChild(caption);
-            outputImageContainer.appendChild(imageWrapper);
-        });
-        
-        // Add generation info if available
-        if (resultDetails.generation_info) {
-            let infoHtml = '<h3>Generation Info</h3>';
-            
-            if (typeof resultDetails.generation_info === 'string') {
-                // If it's just a string, display it as is
-                infoHtml += `<pre>${resultDetails.generation_info}</pre>`;
-            } else {
-                // If it's an object, format it nicely using our helper function
-                infoHtml += formatComplexData(resultDetails.generation_info, 'generator');
-            }
-            
-            outputInfo.innerHTML = infoHtml;
-        }
-        
-        // Add a view in gallery button
-        const galleryLink = document.createElement('button');
-        galleryLink.className = 'secondary-button';
-        galleryLink.textContent = 'View in Gallery';
-        galleryLink.onclick = () => {
-            showView('gallery-view', 'nav-gallery');
-            loadGalleryImages();
-        };
-        
-        outputInfo.appendChild(document.createElement('hr'));
-        outputInfo.appendChild(galleryLink);
-    }
-
-    // Modified handleGenerateImageClick function to start polling
+    // Modified handleGenerateImageClick function to use WebSocket updates
     async function handleGenerateImageClick(event) {
         event.preventDefault();
         
@@ -687,6 +839,7 @@ document.addEventListener('DOMContentLoaded', () => {
         outputInfo.innerHTML = '';
         progressText.innerText = 'Preparing job submission...';
         progressBar.value = 0;
+        progressImagePreview.style.display = 'none';
         
         // Collect parameters from the form
         const targetServerAlias = serverAliasSelect.value;
@@ -701,7 +854,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (loraSelect && loraWeight && loraSelect.value) {
                 loraParams.push({
-                    name: loraSelect.value,
+                    model: loraSelect.value,
                     weight: parseFloat(loraWeight.value) || 0.8
                 });
             }
@@ -709,100 +862,88 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Build generation parameters object
         const generationParams = {
-            positive_prompt: positivePromptInput.value.trim(),
-            negative_prompt: negativePromptInput ? negativePromptInput.value.trim() : '',
-            steps: parseInt(stepsInput ? stepsInput.value : 20, 10),
-            cfg_scale: parseFloat(cfgScaleInput ? cfgScaleInput.value : 7.0),
-            width: parseInt(widthInput ? widthInput.value : 512, 10),
-            height: parseInt(heightInput ? heightInput.value : 512, 10),
-            seed: seedInput && seedInput.value.trim() ? parseInt(seedInput.value.trim(), 10) : -1,
-            subseed: subseedInput && subseedInput.value.trim() ? parseInt(subseedInput.value.trim(), 10) : -1,
-            checkpoint_name: checkpointSelect.value,
-            num_images: parseInt(numImagesInput ? numImagesInput.value : 1, 10),
-            restore_faces: restoreFacesInput ? restoreFacesInput.checked : false,
-            sampler_name: samplerNameInput ? samplerNameInput.value.trim() : 'Euler',
-            style_preset: stylePresetInput ? stylePresetInput.value.trim() : 'simple'
+            prompt: positivePromptInput.value.trim(),
+            negative_prompt: negativePromptInput.value.trim(),
+            steps: parseInt(stepsInput.value) || 20,
+            cfg_scale: parseFloat(cfgScaleInput.value) || 7.0,
+            width: parseInt(widthInput.value) || 512,
+            height: parseInt(heightInput.value) || 512,
+            checkpoint_name: checkpointSelect.value, // This is the correct parameter name expected by the server
+            sampler_name: samplerNameInput.value,
+            seed: seedInput.value ? parseInt(seedInput.value) : -1,
+            subseed: subseedInput.value ? parseInt(subseedInput.value) : -1,
+            batch_size: parseInt(numImagesInput.value) || 1,
+            restore_faces: restoreFacesInput.checked,
+            enable_hr: enableHiresFixInput.checked,
+            style_preset: stylePresetInput.value,
+            sampling_category: samplingCategoryInput.value,
+            upscaler_model: upscalerModelInput.value !== 'None' ? upscalerModelInput.value : null,
+            refiner_model: refinerModelInput.value !== 'None' ? refinerModelInput.value : null,
+            scheduler_or_quality_preset: schedulerOrQualityPresetInput.value,
         };
         
-        // Add LoRAs to parameters if any exist
+        // Add LoRA parameters if any exist
         if (loraParams.length > 0) {
             generationParams.loras = loraParams;
         }
         
-        // Additional parameters if specified
-        if (samplingCategoryInput && samplingCategoryInput.value.trim()) {
-            generationParams.sampling_category = samplingCategoryInput.value.trim();
-        }
-        
-        if (enableHiresFixInput && enableHiresFixInput.checked) {
-            generationParams.enable_hires_fix = true;
-        }
-        
-        if (upscalerModelInput && upscalerModelInput.value.trim() !== 'None') {
-            generationParams.upscaler_model = upscalerModelInput.value.trim();
-        }
-        
-        if (refinerModelInput && refinerModelInput.value.trim() !== 'None') {
-            generationParams.refiner_model = refinerModelInput.value.trim();
-        }
-        
-        if (schedulerOrQualityPresetInput && schedulerOrQualityPresetInput.value.trim()) {
-            generationParams.scheduler_or_quality_preset = schedulerOrQualityPresetInput.value.trim();
-        }
-        
-        // Prepare request payload
-        const requestData = {
-            target_server_alias: targetServerAlias,
-            generation_params: generationParams
-        };
-        
         try {
-            // Submit job to the server
-            progressText.innerText = 'Submitting job to server...';
+            progressText.innerText = 'Submitting job to queue...';
             
+            // Make the API call to generate the image
             const response = await fetch('/api/v1/generate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(requestData)
+                body: JSON.stringify({
+                    target_server_alias: targetServerAlias,
+                    generation_params: generationParams
+                })
             });
             
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Server returned ${response.status}`);
             }
             
-            const data = await response.json();
-            const jobId = data.mobilesd_job_id;
+            const responseData = await response.json();
+            const jobId = responseData.mobilesd_job_id;
             
             if (!jobId) {
-                throw new Error('Server response missing job ID');
+                throw new Error('No job ID returned from server');
             }
             
-            progressText.innerText = `Job submitted successfully. Job ID: ${jobId}`;
+            // Set the current job ID for tracking
+            currentJobId = jobId;
+            progressText.innerText = `Job queued. Job ID: ${jobId}`;
+            progressBar.value = 5; // Show some initial progress
             
-            // Start polling for status updates
-            const pollInterval = 2000; // 2 seconds
-            let shouldContinuePolling = true;
+            // Subscribe to this job via WebSocket
+            if (jobClient) {
+                jobClient.subscribeToJob(jobId);
+            }
             
-            const poll = async () => {
-                shouldContinuePolling = await pollJobStatus(jobId);
-                
-                if (shouldContinuePolling) {
-                    setTimeout(poll, pollInterval);
-                } else {
-                    // Polling complete or error occurred
+            // Get the initial job status to show in UI
+            const initialStatusResponse = await fetch(`/api/v1/queue/jobs/${jobId}/status`);
+            if (initialStatusResponse.ok) {
+                const initialStatus = await initialStatusResponse.json();
+                currentJob = initialStatus;
+                updateProgressUI(initialStatus);
+            }
+            
+            // Re-enable the generate button
                     generateBtn.disabled = false;
-                }
-            };
-            
-            // Start polling after a short delay
-            setTimeout(poll, 1000);
             
         } catch (error) {
-            console.error('Error submitting generation job:', error);
+            console.error('Error generating image:', error);
             progressText.innerText = `Error: ${error.message}`;
+            outputInfo.innerHTML = `<div class="error-message">
+                <h3>Error Submitting Job</h3>
+                <p>${error.message}</p>
+            </div>`;
+            
+            // Re-enable the generate button
             generateBtn.disabled = false;
         }
     }
@@ -1015,20 +1156,56 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
             const jobs = data.jobs || [];
             
-            // Hide loading, show empty message if needed
+            // Hide loading
             queueLoading.style.display = 'none';
             
-            if (jobs.length === 0) {
+            // Display jobs (or empty message)
+            displayQueueJobs(jobs);
+            
+        } catch (error) {
+            console.error('Error loading jobs:', error);
+            queueLoading.style.display = 'none';
+            queueEmpty.style.display = 'block';
+            queueEmpty.innerHTML = `<p>Error loading jobs: ${error.message}</p>`;
+        }
+    }
+    
+    // Function to display jobs in the queue table
+    function displayQueueJobs(jobs) {
+        if (!queueJobsTable || !queueEmpty) return;
+        
+        // Clear existing rows
+        queueJobsTable.innerHTML = '';
+        
+        // Show empty message if needed
+        if (!jobs || jobs.length === 0) {
                 queueEmpty.style.display = 'block';
                 return;
             }
             
-            // Create a map to store job elements
-            const jobElementsMap = new Map();
+        queueEmpty.style.display = 'none';
+        
+        // Filter jobs if a status filter is active
+        const statusFilter = queueStatusFilter ? queueStatusFilter.value : '';
+        const filteredJobs = statusFilter ? 
+            jobs.filter(job => job.status.toLowerCase() === statusFilter.toLowerCase()) : 
+            jobs;
             
-            // Render jobs
-            jobs.forEach(job => {
+        if (filteredJobs.length === 0) {
+            queueEmpty.style.display = 'block';
+            queueEmpty.innerHTML = `<p>No jobs with status "${statusFilter}" found.</p>`;
+            return;
+        }
+        
+        // Sort jobs by creation timestamp (newest first)
+        filteredJobs.sort((a, b) => {
+            return new Date(b.creation_timestamp) - new Date(a.creation_timestamp);
+        });
+            
+        // Render each job
+        filteredJobs.forEach(job => {
                 const row = document.createElement('tr');
+            row.id = `job-row-${job.mobilesd_job_id}`;
                 row.dataset.jobId = job.mobilesd_job_id;
                 
                 // Format date
@@ -1043,8 +1220,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 let previewHtml = '';
                 
                 if (job.status === 'processing') {
-                    // Add progress bar if this is a processing job
-                    // Always include progress bar for processing jobs, even if percentage is 0
+                // IMPORTANT: Always include progress bar for processing jobs, even if percentage is 0
+                // Use progress_percentage if available, otherwise default to 0
                     const progressPercentage = job.result_details?.progress_percentage || 0;
                     progressHtml = `
                         <div class="job-progress-container">
@@ -1059,7 +1236,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (job.result_details && job.result_details.preview_image) {
                         previewHtml = `
                             <div style="margin-top: 0.5rem;">
-                                <img src="/outputs/${job.result_details.preview_image}" 
+                            <img src="/outputs/${job.result_details.preview_image}?t=${Date.now()}" 
                                      alt="Preview" 
                                      class="job-preview-image"
                                      loading="lazy">
@@ -1121,194 +1298,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 
                 queueJobsTable.appendChild(row);
-                
-                // Store the row element for later updates
-                jobElementsMap.set(job.mobilesd_job_id, row);
-            });
-            
-            // Start progress polling for processing jobs
-            if (jobs.some(job => job.status === 'processing')) {
-                // Clear any existing interval before creating a new one
-                if (window.jobProgressInterval) {
-                    console.log('Clearing existing job polling interval');
-                    clearInterval(window.jobProgressInterval);
-                    window.jobProgressInterval = null;
-                }
-                
-                console.log(`Starting job polling for ${jobs.filter(job => job.status === 'processing').length} processing jobs`);
-                
-                // Create a new interval with a unique name for this instance
-                const pollStartTime = Date.now();
-                
-                // URGENT FIX: Use a shorter poll interval (2 seconds instead of default 5) for more responsive updates
-                window.jobProgressInterval = setInterval(updateProcessingJobs, 2000);
-                
-                // Run the first update immediately
-                updateProcessingJobs();
-                
-                // URGENT FIX: Move to a named function for better reliability and debugging
-                async function updateProcessingJobs() {
-                    try {
-                        // Only poll if the queue tab is visible
-                        if (queueView && queueView.style.display !== 'none') {
-                            console.log(`[${new Date().toISOString()}] Polling for processing jobs... (running for ${Math.round((Date.now() - pollStartTime)/1000)}s)`);
-                            
-                            // Get all job IDs that are currently in 'processing' state directly from the DOM
-                            // This is more reliable than using the map keys
-                            const processingRows = Array.from(queueJobsTable.querySelectorAll('tr[data-job-id] .job-status-processing')).map(
-                                statusEl => statusEl.closest('tr').dataset.jobId
-                            );
-                            
-                            console.log(`Found ${processingRows.length} processing jobs in DOM`);
-                            
-                            // URGENT FIX: If no processing jobs found, check directly with API before clearing the interval
-                            if (processingRows.length === 0) {
-                                console.log('No processing jobs found in DOM, checking API for any processing jobs');
-                                
-                                try {
-                                    // Check if there are any processing jobs in the server
-                                    const response = await fetch('/api/v1/queue/jobs');
-                                    if (response.ok) {
-                                        const data = await response.json();
-                                        const processingJobsInServer = (data.jobs || []).filter(j => j.status === 'processing');
-                                        
-                                        if (processingJobsInServer.length > 0) {
-                                            console.log(`Found ${processingJobsInServer.length} processing jobs in server but not in DOM, refreshing queue`);
-                                            loadQueueJobs(); // Refresh the entire queue to sync with server
-                                            return;
-                                        }
-                                    }
-                                } catch (apiError) {
-                                    console.error('Error checking for processing jobs:', apiError);
-                                }
-                                
-                                console.log('No more processing jobs, clearing interval');
-                                clearInterval(window.jobProgressInterval);
-                                window.jobProgressInterval = null;
-                                return;
-                            }
-                            
-                            // Update each processing job - sequentially to avoid race conditions
-                            for (const jobId of processingRows) {
-                                try {
-                                    console.log(`Checking status of job ${jobId}`);
-                                    const response = await fetch(`/api/v1/queue/jobs/${jobId}/status`);
-                                    if (!response.ok) {
-                                        console.warn(`Error fetching job ${jobId}: ${response.status}`);
-                                        continue;
-                                    }
-                                    
-                                    const job = await response.json();
-                                    console.log(`Got job status: ${job.status}, progress: ${job.result_details?.progress_percentage || 0}%`);
-                                    
-                                    const row = document.querySelector(`tr[data-job-id="${jobId}"]`);
-                                    
-                                    if (!row) {
-                                        console.warn(`Row for job ${jobId} not found in DOM`);
-                                        continue;
-                                    }
-                                    
-                                    // If job is no longer in processing state, refresh the entire queue
-                                    if (job.status !== 'processing') {
-                                        console.log(`Job ${jobId} status changed to ${job.status}, refreshing queue`);
-                                        clearInterval(window.jobProgressInterval);
-                                        window.jobProgressInterval = null;
-                                        loadQueueJobs();
-                                        return;
-                                    }
-                                    
-                                    // URGENT FIX: More reliable progress bar updates - get the cells first
-                                    const statusCell = row.querySelector('td:nth-child(2)');
-                                    if (!statusCell) {
-                                        console.warn(`Status cell for job ${jobId} not found`);
-                                        continue;
-                                    }
-                                    
-                                    // Find or create progress elements
-                                    let progressContainer = statusCell.querySelector('.job-progress-container');
-                                    let progressBar, progressFill, progressText;
-                                    const progressPercentage = job.result_details?.progress_percentage || 0;
-                                    
-                                    // If no progress container exists yet, create the whole structure
-                                    if (!progressContainer) {
-                                        console.log(`Creating new progress container for job ${jobId}`);
-                                        progressContainer = document.createElement('div');
-                                        progressContainer.className = 'job-progress-container';
-                                        
-                                        // Insert the container right after the status badge
-                                        const statusBadge = statusCell.querySelector('.job-status');
-                                        if (statusBadge) {
-                                            statusBadge.insertAdjacentElement('afterend', progressContainer);
-                                        } else {
-                                            statusCell.appendChild(progressContainer);
-                                        }
-                                        
-                                        // Create the progress bar and text elements
-                                        progressContainer.innerHTML = `
-                                            <div class="job-progress-bar">
-                                                <div class="job-progress-bar-fill" style="width: ${progressPercentage}%"></div>
-                                            </div>
-                                            <div class="job-progress-text">${progressPercentage.toFixed(1)}%</div>
-                                        `;
-                                    } else {
-                                        // Get existing elements
-                                        progressBar = progressContainer.querySelector('.job-progress-bar');
-                                        progressFill = progressContainer.querySelector('.job-progress-bar-fill');
-                                        progressText = progressContainer.querySelector('.job-progress-text');
-                                        
-                                        // Update progress bar if found
-                                        if (progressFill) {
-                                            progressFill.style.width = `${progressPercentage}%`;
-                                        }
-                                        
-                                        // Update progress text if found
-                                        if (progressText) {
-                                            progressText.textContent = `${progressPercentage.toFixed(1)}%`;
-                                        }
-                                    }
-                                    
-                                    // URGENT FIX: Check for preview image updates
-                                    if (job.result_details && job.result_details.preview_image) {
-                                        let previewImgElement = statusCell.querySelector('.job-preview-image');
-                                        
-                                        if (!previewImgElement) {
-                                            // Create the preview image if it doesn't exist
-                                            const previewContainer = document.createElement('div');
-                                            previewContainer.style.marginTop = '0.5rem';
-                                            
-                                            previewContainer.innerHTML = `
-                                                <img src="/outputs/${job.result_details.preview_image}" 
-                                                     alt="Preview" 
-                                                     class="job-preview-image"
-                                                     loading="lazy">
-                                            `;
-                                            
-                                            statusCell.appendChild(previewContainer);
-                                        } else {
-                                            // Just update the src if image already exists and it's different
-                                            const currentSrc = previewImgElement.src.split('/').pop();
-                                            if (currentSrc !== job.result_details.preview_image) {
-                                                previewImgElement.src = `/outputs/${job.result_details.preview_image}`;
-                                                console.log(`Updated preview image for job ${jobId}: ${job.result_details.preview_image}`);
-                                            }
-                                        }
-                                    }
-                                } catch (error) {
-                                    console.error(`Error updating job ${jobId}:`, error);
-                                }
-                            }
-                        }
-                    } catch (outerError) {
-                        console.error('Error in job polling interval:', outerError);
-                    }
-                }
-            }
-            
-        } catch (error) {
-            console.error('Error loading queue jobs:', error);
-            queueLoading.style.display = 'none';
-            queueJobsTable.innerHTML = `<tr><td colspan="5" class="error-message">Error loading jobs: ${error.message}</td></tr>`;
-        }
+        });
     }
     
     // Function to open job details in modal
@@ -2430,4 +2420,130 @@ document.addEventListener('DOMContentLoaded', () => {
             modelDetailsModal.style.display = 'none';
         }
     });
+
+    // Initialize WebSocket client when page loads
+    initializeJobClient();
+
+    // Function to display completed job images in the output area
+    function displayCompletedJobImages(jobStatus) {
+        if (!outputImageContainer || !outputInfo) return;
+        
+        // Clear previous output
+        outputImageContainer.innerHTML = '';
+        outputInfo.innerHTML = '';
+        
+        console.log('Displaying completed job images, status:', jobStatus);
+        
+        const resultDetails = jobStatus.result_details || {};
+        
+        // Check for images in either field (saved_filenames is the new field, images is legacy)
+        const imageFiles = resultDetails.saved_filenames || resultDetails.images || [];
+        
+        // If we have images but the job is marked as 'failed', it likely succeeded but had an error during cleanup
+        // This helps users still see their images even with DB status issues
+        if (imageFiles.length > 0 && jobStatus.status === 'failed') {
+            console.log('Job is marked as failed but has images. Treating as successful.');
+            outputInfo.innerHTML = `<div class="info-message">Job completed with images (${imageFiles.length}), but had an error during cleanup.</div>`;
+        }
+        
+        if (imageFiles.length === 0) {
+            // No images found - check if there's an error message
+            if (resultDetails.error_message || resultDetails.error) {
+                const errorMsg = resultDetails.error_message || resultDetails.error || 'Unknown error occurred';
+                console.error('Job error:', errorMsg);
+                outputInfo.innerHTML = `<div class="error-message">Error: ${errorMsg}</div>`;
+            } else if (jobStatus.status === 'completed') {
+                outputInfo.innerHTML = '<div class="warning-message">Job completed but no images were generated.</div>';
+            } else {
+                outputInfo.innerHTML = `<div class="info-message">Job status: ${jobStatus.status}</div>`;
+            }
+            return;
+        }
+        
+        // Display all images
+        console.log(`Displaying ${imageFiles.length} job images:`, imageFiles);
+        
+        // Create container for the image(s)
+        const imagesContainer = document.createElement('div');
+        imagesContainer.className = 'job-images-container';
+        
+        // Add each image to the container
+        imageFiles.forEach(imageName => {
+            const imgWrapper = document.createElement('div');
+            imgWrapper.className = 'job-image-wrapper';
+            
+            const img = document.createElement('img');
+            img.src = `/outputs/${imageName}`;
+            img.alt = 'Generated Image';
+            img.className = 'job-output-image';
+            
+            // Add click handler to show the full-size image
+            img.onclick = function() {
+                showImageModal(this.src);
+            };
+            
+            imgWrapper.appendChild(img);
+            
+            // Add download link
+            const downloadLink = document.createElement('a');
+            downloadLink.href = `/outputs/${imageName}`;
+            downloadLink.download = imageName;
+            downloadLink.className = 'download-link';
+            downloadLink.innerHTML = '<i class="fa fa-download"></i> Download';
+            imgWrapper.appendChild(downloadLink);
+            
+            imagesContainer.appendChild(imgWrapper);
+        });
+        
+        outputImageContainer.appendChild(imagesContainer);
+        
+        // Display generation info if available
+        if (resultDetails.generation_info) {
+            let infoHTML = '<div class="generation-info"><h4>Generation Info</h4>';
+            
+            try {
+                // Display generation info as key-value pairs
+                const genInfo = typeof resultDetails.generation_info === 'object' 
+                    ? resultDetails.generation_info 
+                    : JSON.parse(resultDetails.generation_info);
+                
+                // Format important info at the top
+                const importantKeys = ['prompt', 'negative_prompt', 'seed', 'steps', 'sampler_name', 'width', 'height'];
+                
+                // First show important keys
+                importantKeys.forEach(key => {
+                    if (genInfo[key] !== undefined) {
+                        infoHTML += `<div class="info-row important"><span class="info-label">${key}:</span> <span class="info-value">${genInfo[key]}</span></div>`;
+                    }
+                });
+                
+                // Then show other keys
+                Object.keys(genInfo).forEach(key => {
+                    if (!importantKeys.includes(key) && 
+                        typeof genInfo[key] !== 'object' && 
+                        genInfo[key] !== null && 
+                        genInfo[key] !== undefined) {
+                        infoHTML += `<div class="info-row"><span class="info-label">${key}:</span> <span class="info-value">${genInfo[key]}</span></div>`;
+                    }
+                });
+                
+                infoHTML += '</div>';
+                outputInfo.innerHTML = infoHTML;
+            } catch (e) {
+                console.error('Error parsing generation info:', e);
+                outputInfo.innerHTML = `<div class="generation-info"><pre>${resultDetails.generation_info}</pre></div>`;
+            }
+        } else {
+            // No generation info, just show basic job details
+            outputInfo.innerHTML = `
+                <div class="generation-info">
+                    <div class="info-row"><span class="info-label">Job ID:</span> <span class="info-value">${jobStatus.mobilesd_job_id}</span></div>
+                    <div class="info-row"><span class="info-label">Status:</span> <span class="info-value">${jobStatus.status}</span></div>
+                    <div class="info-row"><span class="info-label">Target:</span> <span class="info-value">${jobStatus.target_server_alias || 'Unknown'}</span></div>
+                    ${resultDetails.positive_prompt ? `<div class="info-row important"><span class="info-label">Prompt:</span> <span class="info-value">${resultDetails.positive_prompt}</span></div>` : ''}
+                    ${resultDetails.negative_prompt ? `<div class="info-row important"><span class="info-label">Negative Prompt:</span> <span class="info-value">${resultDetails.negative_prompt}</span></div>` : ''}
+                </div>
+            `;
+        }
+    }
 });

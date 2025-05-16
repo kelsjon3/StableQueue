@@ -23,7 +23,7 @@ router.get('/', async (req, res) => {
 // POST /api/v1/servers - Add a new server configuration
 router.post('/', async (req, res) => {
   try {
-    const { alias, apiUrl, auth } = req.body;
+    const { alias, apiUrl, auth, modelRootPath } = req.body;
     if (!alias || !apiUrl) {
       return res.status(400).json({ message: 'Missing required fields: alias and apiUrl.' });
     }
@@ -33,7 +33,12 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: `Server with alias '${alias}' already exists.` });
     }
 
-    const newServer = { alias, apiUrl, auth: auth || null }; // Ensure auth is null if not provided
+    const newServer = { 
+      alias, 
+      apiUrl, 
+      auth: auth || null,
+      modelRootPath: modelRootPath || '' // Add model root path field
+    };
     servers.push(newServer);
     await writeServersConfig(servers);
     res.status(201).json({ message: 'Server configuration added successfully.', server: newServer });
@@ -61,7 +66,7 @@ router.get('/:alias', async (req, res) => {
 router.put('/:alias', async (req, res) => {
   try {
     const newAlias = req.body.alias; // Get the new alias from the body
-    const { apiUrl, authUser, authPass } = req.body; // Get other fields, matching client
+    const { apiUrl, authUser, authPass, modelRootPath } = req.body; // Add modelRootPath to destructuring
     const originalAlias = req.params.alias; // The alias used to identify the server in the URL
 
     if (!newAlias || !apiUrl) {
@@ -87,6 +92,7 @@ router.put('/:alias', async (req, res) => {
       // Store authUser and authPass; store as undefined if empty string from form so they might be omitted or set to null
       authUser: authUser || undefined, 
       authPass: authPass || undefined,
+      modelRootPath: modelRootPath || '' // Add model root path field
     };
     
     // Clean up undefined auth properties to ensure they are omitted or null if not provided

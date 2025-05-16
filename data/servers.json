@@ -3,5 +3,10 @@
     "alias": "Laptop",
     "apiUrl": "http://192.168.73.138:42003",
     "auth": null
+  },
+  {
+    "alias": "ArchLinux",
+    "apiUrl": "http://192.168.73.140:42003",
+    "auth": null
   }
 ]

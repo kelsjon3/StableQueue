@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const dotenv = require('dotenv');
+const http = require('http'); // Add http module for creating server
 const { startDispatcher, stopDispatcher } = require('./services/gradioJobDispatcher');
 const { readServersConfig, addServerConfig, updateServerConfig, deleteServerConfig, initializeDataDirectory } = require('./utils/configHelpers');
 const { readJobQueue, addJobToQueue, getJobById } = require('./utils/jobQueueHelpers');
@@ -14,6 +15,7 @@ const gradioJobDispatcher = require('./services/gradioJobDispatcher');
 const forgeJobMonitor = require('./services/forgeJobMonitor');
 const dispatcher = require('./services/dispatcher');
 const modelDB = require('./utils/modelDatabase');
+const jobStatusManager = require('./services/jobStatusManager');
 
 // Load environment variables from .env file
 dotenv.config();
@@ -108,12 +110,16 @@ Object.keys(signals).forEach((signal) => {
     });
 });
 
-// Start the server
-let server;
+// Create HTTP server
+const server = http.createServer(app);
 
+// Initialize socket.io for job status updates
+jobStatusManager.initialize(server);
+
+// Start the server
 initializeDataDirectory();
 
-server = app.listen(PORT, async () => {
+server.listen(PORT, async () => {
   console.log(`MobileSD server listening on port ${PORT}`);
   console.log(`Serving static files from: ${path.join(__dirname, 'public')}`);
   console.log(`Using config directory: ${process.env.CONFIG_DATA_PATH || path.join(__dirname, 'data')}`);

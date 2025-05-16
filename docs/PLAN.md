@@ -90,11 +90,28 @@
         *   Parses SSE messages (`estimation`, `process_starts`, `process_generating`, `heartbeat`, `process_completed`).
         *   Downloads and saves images to `STABLE_DIFFUSION_SAVE_PATH` on completion.
         *   Updates job status to `completed` or `failed` accordingly.
+    *   **Enhanced Monitoring with Polling:**
+        *   **Status: IMPLEMENTED**
+        *   **Dual Approach:** Uses both SSE events and direct polling to ensure reliable progress updates.
+        *   **Polling Mechanism:** Periodically queries Forge's `/internal/progress` endpoint for more accurate progress data.
+        *   **Preview Image Extraction:** Actively retrieves preview images from both SSE events and polling responses.
+        *   **Improved Progress Reporting:** Provides smoother progress updates to the UI by combining data from both sources.
+        *   **Fallback Strategy:** Continues functioning even when SSE connection has issues or doesn't provide adequate updates.
+        *   **State Tracking:** Intelligently manages state to avoid duplicate processing of images or events.
 5.  **Robustness Considerations:**
     *   **Status: PARTIALLY IMPLEMENTED**
     *   Added utility scripts for queue management (clearing, reset).
     *   Implemented timestamp filtering to avoid processing stale jobs on restart.
     *   Created error handling and logging for better debugging.
+    *   **Improved Logging System:**
+        *   **Status: IMPLEMENTED**
+        *   Enhanced logging with specific prefixes to track communication flow:
+            *   `[FORGE→SERVER]`: Events and data coming from Forge to MobileSD
+            *   `[SERVER→CLIENT]`: Updates sent from MobileSD to browser clients
+            *   `[POLL]`: Information about the polling operations
+            *   `[ARTIFICIAL]`: Artificial progress updates when real progress is delayed
+        *   Better error handling with detailed context information
+        *   Consolidated job status tracking to prevent issues with duplicated status updates
 
 ## II.ter. Model Database System (NEW IMPLEMENTATION)
 
@@ -353,7 +370,7 @@ Add a new "Models" tab to display both checkpoints and LoRAs with their preview 
 
 *Note: The following "MobileSD Development Plan" section, with its own Phases I-VI and "VII. Immediate Steps", describes an earlier or alternative implementation path focusing on a synchronous interaction with Forge's FastAPI endpoints (e.g., `/sdapi/v1/txt2img`) via a `services/dispatcher.js`. While parts of this may have been partially implemented, the **primary and current development focus for achieving a robust, browser-independent job queuing and processing system is detailed in Section II.bis: Core Backend: Persistent Job Queuing & Dispatcher System and its corresponding VII. Immediate Steps (Revised - Focusing on Phase 3 Frontend Development).** The Section II.bis approach utilizes Forge's asynchronous Gradio API (`/queue/join` and `/queue/data`) for enhanced resilience and background processing.*
 
-**Overall Goal:** Create a simple mobile-friendly web UI to interact with a remote Stable Diffusion Forge server, focusing initially on text-to-image generation.
+**Overall Goal:** Create a mobile-friendly web UI to interact with a remote Stable Diffusion Forge server. It must be a robust, browser-independent queuing system for managing multiple image generation jobs.
 
 ---
 

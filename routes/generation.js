@@ -20,6 +20,25 @@ router.post('/generate', async (req, res) => {
          return res.status(400).json({ error: 'Invalid or empty generation_params object provided' });
     }
 
+    // More robust checkpoint parameter normalization
+    console.log('Checking generation parameters for checkpoint:', JSON.stringify({
+        checkpoint_name: generation_params.checkpoint_name,
+        sd_checkpoint: generation_params.sd_checkpoint
+    }));
+
+    // Normalize the checkpoint parameter
+    if (!generation_params.checkpoint_name && generation_params.sd_checkpoint) {
+        console.log(`Converting sd_checkpoint parameter to checkpoint_name: ${generation_params.sd_checkpoint}`);
+        generation_params.checkpoint_name = generation_params.sd_checkpoint;
+        // Keep sd_checkpoint for backward compatibility
+    } else if (!generation_params.checkpoint_name && !generation_params.sd_checkpoint) {
+        console.error('No checkpoint parameter found in request!');
+        return res.status(400).json({ error: 'Missing checkpoint parameter. Please provide checkpoint_name in generation parameters.' });
+    }
+
+    // Verify we have a checkpoint_name now
+    console.log(`Using checkpoint_name: ${generation_params.checkpoint_name}`);
+
     try {
         const servers = await readServersConfig(); // Keep server validation
         if (!servers.find(s => s.alias === target_server_alias)) {
