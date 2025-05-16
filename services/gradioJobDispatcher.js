@@ -462,13 +462,14 @@ async function processJob(job) {
             status: 'processing',
             forge_session_hash: forge_session_hash,
             processing_started_at: new Date().toISOString(),
-            result_details_json: JSON.stringify({ 
+            forge_internal_task_id: forgeInternalTaskId,
+            result_details: { 
                 forge_internal_task_id: forgeInternalTaskId,
                 message: "Job dispatched to Forge.",
                 submission_type: "queue/join",
                 positive_prompt: generation_params.positive_prompt || generation_params.prompt || "",
                 negative_prompt: generation_params.negative_prompt || ""
-            })
+            }
         });
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Status updated to 'processing', forge_session_hash: ${forge_session_hash}, forge_internal_task_id: ${forgeInternalTaskId}.`);
 

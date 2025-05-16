@@ -68,4 +68,35 @@ The key files modified were:
 - Enhanced error handling and cleanup of monitors to prevent resource leaks
 - Made progress updates more reliable by using multiple data sources
 
-These improvements provide a more robust foundation for the MobileSD application, delivering a better user experience with more accurate progress reporting and proper image handling. 
+These improvements provide a more robust foundation for the MobileSD application, delivering a better user experience with more accurate progress reporting and proper image handling.
+
+## Polling Implementation
+
+We've implemented a dual approach for monitoring job progress:
+
+1. **Server-Sent Events (SSE)** - Real-time updates streamed from Forge
+2. **Active Polling** - Making periodic POST requests to Forge's `/internal/progress` endpoint
+
+### Task ID Handling Improvements
+
+A critical issue with our initial polling implementation was the inconsistent handling of the Forge task ID:
+
+1. **Database Schema Changes**:
+   - Added a dedicated `forge_internal_task_id` column to the jobs table
+   - Ensured task ID is stored in both the job record and result_details
+   
+2. **Tracking Task ID** across components:
+   - Dispatcher now stores the task ID properly in all locations
+   - Monitor stores the task ID in memory as a fallback
+   - Added extensive error handling and logging around task ID management
+   
+3. **Request Format Fixes**:
+   - Changed from GET to POST requests based on HAR analysis
+   - Properly formatted the payload as `{"id_task":"task(id)","id_live_preview":-1}`
+   - Added proper Content-Type headers for JSON
+   
+4. **Task ID Format Normalization**:
+   - Implemented automatic detection and fixing of various task ID formats
+   - Added proper task ID cleaning to remove quotes and ensure proper prefix
+
+These improvements ensure the polling mechanism reliably connects to Forge, even when the SSE connection doesn't provide all the expected progress updates. 

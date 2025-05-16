@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     completion_timestamp TEXT,
     target_server_alias TEXT NOT NULL,
     forge_session_hash TEXT,
+    forge_internal_task_id TEXT,
     generation_params_json TEXT NOT NULL,
     result_details_json TEXT,
     retry_count INTEGER DEFAULT 0
@@ -57,6 +58,7 @@ function addJob(jobData) {
         completion_timestamp: null,
         target_server_alias: jobData.target_server_alias,
         forge_session_hash: null,
+        forge_internal_task_id: null,
         generation_params_json: JSON.stringify(jobData.generation_params || {}),
         result_details_json: null,
         retry_count: 0
@@ -65,11 +67,11 @@ function addJob(jobData) {
     const stmt = db.prepare(
         'INSERT INTO jobs ('
         + 'mobilesd_job_id, status, creation_timestamp, last_updated_timestamp, ' 
-        + 'completion_timestamp, target_server_alias, forge_session_hash,'
+        + 'completion_timestamp, target_server_alias, forge_session_hash, forge_internal_task_id,'
         + 'generation_params_json, result_details_json, retry_count'
         + ') VALUES ('
         + '@mobilesd_job_id, @status, @creation_timestamp, @last_updated_timestamp,'
-        + '@completion_timestamp, @target_server_alias, @forge_session_hash,'
+        + '@completion_timestamp, @target_server_alias, @forge_session_hash, @forge_internal_task_id,'
         + '@generation_params_json, @result_details_json, @retry_count'
         + ')'
     );
@@ -105,6 +107,7 @@ function getJobById(mobilesdJobId) {
             completion_timestamp: row.completion_timestamp,
             target_server_alias: row.target_server_alias,
             forge_session_hash: row.forge_session_hash,
+            forge_internal_task_id: row.forge_internal_task_id,
             retry_count: row.retry_count
         };
     }
@@ -138,7 +141,7 @@ function updateJob(mobilesdJobId, updates) {
     
     const allowedColumns = [
         'status', 'last_updated_timestamp', 'completion_timestamp', 
-        'forge_session_hash', 'generation_params_json', 'result_details_json', 
+        'forge_session_hash', 'forge_internal_task_id', 'generation_params_json', 'result_details_json', 
         'retry_count'
     ];
     

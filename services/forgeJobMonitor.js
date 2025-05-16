@@ -567,6 +567,13 @@ async function startMonitoringJob(mobilesdJobId) {
     const sseUrl = new URL(`${serverConfig.apiUrl}/queue/data?session_hash=${job.forge_session_hash}`).href;
     console.log(`[Monitor] Job ${mobilesdJobId}: Starting to monitor Forge SSE stream at ${sseUrl}`);
 
+    // Log the forge_internal_task_id for debugging
+    if (job.forge_internal_task_id) {
+        console.log(`[Monitor] Job ${mobilesdJobId}: Using forge_internal_task_id: ${job.forge_internal_task_id}`);
+    } else {
+        console.warn(`[Monitor] Job ${mobilesdJobId}: No forge_internal_task_id found in job object. Polling may fail.`);
+    }
+
     const eventSourceInitDict = {};
     if (serverConfig.username && serverConfig.password) {
         const  authHeader = 'Basic ' + Buffer.from(serverConfig.username + ":" + serverConfig.password).toString('base64');
@@ -589,7 +596,9 @@ async function startMonitoringJob(mobilesdJobId) {
         pollingStarted: false,
         pollingAttempts: 0,
         lastPollingTime: null,
-        hasReceivedPreview: false
+        hasReceivedPreview: false,
+        // Store the forge_internal_task_id directly
+        forgeInternalTaskId: job.forge_internal_task_id
     };
 
     const es = new EventSource(sseUrl, eventSourceInitDict);
@@ -1042,7 +1051,6 @@ async function startMonitoringJob(mobilesdJobId) {
     };
 }
 
-// Add this new polling function
 /**
  * Periodically poll Forge for job status, progress, and preview images
  * @param {Object} job - The job object
@@ -1059,18 +1067,48 @@ async function startPollingForgeStatus(job, serverConfig, monitorState) {
     monitorState.pollingStarted = true;
     monitorState.lastPollingTime = Date.now();
     
+    // Store the forge_internal_task_id directly in the monitor state when we start polling
+    // This way we have it even if the job object gets updated later
+    monitorState.forgeInternalTaskId = job.forge_internal_task_id;
+    console.log(`[POLL] Job ${job.mobilesd_job_id}: Stored task ID in monitor state: ${monitorState.forgeInternalTaskId || 'not available yet'}`);
+    
+    // Wait a short time to ensure the dispatcher has updated the job with forge_internal_task_id
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
     // Set up polling interval
     const pollInterval = setInterval(async () => {
         try {
+            // Get the latest job data from the database to ensure we have the forge_internal_task_id
+            const currentJob = await jobQueue.getJobById(job.mobilesd_job_id);
+            if (!currentJob) {
+                console.error(`[POLL] Job ${job.mobilesd_job_id}: Job not found in database`);
+                clearInterval(pollInterval);
+                delete activePolls[job.mobilesd_job_id];
+                return;
+            }
+            
+            // Use the current job for polling but ensure it has the forge_internal_task_id
+            const jobToUse = { ...currentJob };
+            
+            // If the current job doesn't have the forge_internal_task_id, try to get it from monitor state
+            if (!jobToUse.forge_internal_task_id && monitorState.forgeInternalTaskId) {
+                console.log(`[POLL] Job ${job.mobilesd_job_id}: Using task ID from monitor state: ${monitorState.forgeInternalTaskId}`);
+                jobToUse.forge_internal_task_id = monitorState.forgeInternalTaskId;
+            }
+            
             // Check if we should stop polling
             if (monitorState.pollingAttempts >= POLLING_MAX_ATTEMPTS || 
                 !activeMonitors[job.mobilesd_job_id] || 
-                monitorState.hasCompletedProcessing) {
+                monitorState.hasCompletedProcessing ||
+                jobToUse.status === 'completed' ||
+                jobToUse.status === 'failed') {
                 clearInterval(pollInterval);
                 delete activePolls[job.mobilesd_job_id];
                 console.log(`[POLL] Job ${job.mobilesd_job_id}: Stopping polling - ${
                     monitorState.pollingAttempts >= POLLING_MAX_ATTEMPTS ? 'max attempts reached' : 
                     !activeMonitors[job.mobilesd_job_id] ? 'monitor closed' : 
+                    jobToUse.status === 'completed' ? 'job completed' :
+                    jobToUse.status === 'failed' ? 'job failed' :
                     'job completed'}`);
                 return;
             }
@@ -1082,7 +1120,7 @@ async function startPollingForgeStatus(job, serverConfig, monitorState) {
             console.log(`[POLL] Job ${job.mobilesd_job_id}: Polling attempt ${monitorState.pollingAttempts}/${POLLING_MAX_ATTEMPTS}`);
 
             // Get current job status from Forge
-            const progressResponse = await pollForProgress(job, serverConfig);
+            const progressResponse = await pollForProgress(jobToUse, serverConfig);
             
             if (progressResponse) {
                 console.log(`[POLL→SERVER] Job ${job.mobilesd_job_id}: Received progress update from polling:`, 
@@ -1094,7 +1132,7 @@ async function startPollingForgeStatus(job, serverConfig, monitorState) {
                     console.log(`[POLL→SERVER] Job ${job.mobilesd_job_id}: Progress: ${percentage}%`);
                     
                     // Update job progress
-                    await updateAndBroadcastProgress(job, percentage, null);
+                    await updateAndBroadcastProgress(jobToUse, percentage, null);
                     
                     // Update monitor state
                     monitorState.lastProgressValue = percentage;
@@ -1116,7 +1154,7 @@ async function startPollingForgeStatus(job, serverConfig, monitorState) {
                         // Update job with preview image
                         await jobQueue.updateJob(job.mobilesd_job_id, {
                             result_details: { 
-                                ...job.result_details, 
+                                ...jobToUse.result_details, 
                                 preview_image: previewFilename,
                                 preview_source: 'polling'
                             }
@@ -1136,7 +1174,7 @@ async function startPollingForgeStatus(job, serverConfig, monitorState) {
                     
                     // The handleProcessCompleted function will be called by the SSE event handler
                     // We'll just make sure the progress is at 100%
-                    await updateAndBroadcastProgress(job, 100, null);
+                    await updateAndBroadcastProgress(jobToUse, 100, null);
                 }
             }
         } catch (error) {
@@ -1156,12 +1194,48 @@ async function startPollingForgeStatus(job, serverConfig, monitorState) {
  */
 async function pollForProgress(job, serverConfig) {
     try {
-        // Construct the progress endpoint URL
-        const progressUrl = `${serverConfig.apiUrl}/internal/progress?id_task=${job.forge_internal_task_id}`;
+        // Use task ID from the job - make sure it's properly formatted
+        if (!job.forge_internal_task_id) {
+            console.error(`[POLL] Job ${job.mobilesd_job_id}: Missing forge_internal_task_id for polling`);
+            
+            // Let's try to debug what fields are actually present in the job
+            console.log(`[POLL] Job ${job.mobilesd_job_id}: Available job fields: ${Object.keys(job).join(', ')}`);
+            if (job.result_details) {
+                console.log(`[POLL] Job ${job.mobilesd_job_id}: Result details fields: ${Object.keys(job.result_details).join(', ')}`);
+            }
+            
+            return null;
+        }
+        
+        // Make sure the task ID is properly formatted for the /internal/progress endpoint
+        // It should be like "task(id)" but without quotes around the task part
+        let taskId = job.forge_internal_task_id;
+        
+        // Log the original task ID for debugging
+        console.log(`[POLL] Job ${job.mobilesd_job_id}: Original forge_internal_task_id: "${taskId}"`);
+        
+        // If the task ID doesn't start with "task(", add it
+        if (typeof taskId === 'string' && !taskId.startsWith('task(')) {
+            taskId = `task(${taskId})`;
+        }
+        
+        // If the task ID has quotes, remove them
+        if (typeof taskId === 'string') {
+            taskId = taskId.replace(/"/g, '');
+            console.log(`[POLL] Job ${job.mobilesd_job_id}: Formatted task ID for polling: ${taskId}`);
+        }
+        
+        // Construct the progress endpoint URL - NOTE: Using POST with JSON body, not query params
+        const progressUrl = `${serverConfig.apiUrl}/internal/progress`;
         console.log(`[POLL] Job ${job.mobilesd_job_id}: Polling progress from ${progressUrl}`);
         
         // Set up authentication if needed
-        const axiosConfig = {};
+        const axiosConfig = {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        };
+        
         if (serverConfig.username && serverConfig.password) {
             axiosConfig.auth = {
                 username: serverConfig.username,
@@ -1169,11 +1243,20 @@ async function pollForProgress(job, serverConfig) {
             };
         }
         
-        // Make the request
-        const response = await axios.get(progressUrl, axiosConfig);
+        // Prepare the payload based on the HAR capture
+        const payload = {
+            id_task: taskId, // The task ID to check progress for
+            id_live_preview: -1 // Default value for live preview, -1 means no live preview
+        };
+        
+        console.log(`[POLL] Job ${job.mobilesd_job_id}: Sending payload: ${JSON.stringify(payload)}`);
+        
+        // Make the POST request with payload
+        const response = await axios.post(progressUrl, payload, axiosConfig);
         
         // Check if response contains valid data
         if (response.data && typeof response.data === 'object') {
+            console.log(`[POLL] Job ${job.mobilesd_job_id}: Received response: ${JSON.stringify(response.data).substring(0, 200)}`);
             return response.data;
         } else {
             console.warn(`[POLL] Job ${job.mobilesd_job_id}: Empty or invalid response from Forge:`, 
@@ -1184,7 +1267,7 @@ async function pollForProgress(job, serverConfig) {
         console.error(`[POLL] Job ${job.mobilesd_job_id}: Error polling Forge progress: ${error.message}`);
         if (error.response) {
             console.error(`[POLL] Error Status: ${error.response.status}`);
-            console.error(`[POLL] Error Data:`, error.response.data ? error.response.data.toString().substring(0, 200) : 'N/A');
+            console.error(`[POLL] Error Data:`, error.response.data ? JSON.stringify(error.response.data).substring(0, 200) : 'N/A');
         }
         return null;
     }
