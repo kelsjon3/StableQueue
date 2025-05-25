@@ -1,24 +1,47 @@
 const express = require('express');
 const path = require('path');
-const dotenv = require('dotenv');
+const fs = require('fs');
+const socketIo = require('socket.io');
 const http = require('http'); // Add http module for creating server
 const { startDispatcher, stopDispatcher } = require('./services/gradioJobDispatcher');
 const { readServersConfig, addServerConfig, updateServerConfig, deleteServerConfig, initializeDataDirectory } = require('./utils/configHelpers');
 const { readJobQueue, addJobToQueue, getJobById } = require('./utils/jobQueueHelpers');
+const { runMigration } = require('./utils/dbMigration'); // Import the database migration function
 const serversRouter = require('./routes/servers');
 const resourcesRouter = require('./routes/resources');
 const civitaiRouter = require('./routes/civitai');
 const generationRouter = require('./routes/generation');
+const v2GenerationRouter = require('./routes/v2Generation'); // Import the new v2 generation router
+const apiKeysRouter = require('./routes/apiKeys'); // Import the API keys router
 const galleryRouter = require('./routes/gallery');
 const modelsRouter = require('./routes/models');
+const downloadsRouter = require('./routes/downloads');
 const gradioJobDispatcher = require('./services/gradioJobDispatcher');
 const forgeJobMonitor = require('./services/forgeJobMonitor');
 const dispatcher = require('./services/dispatcher');
 const modelDB = require('./utils/modelDatabase');
 const jobStatusManager = require('./services/jobStatusManager');
+const downloadQueueManager = require('./services/downloadQueueManager');
 
-// Load environment variables from .env file
-dotenv.config();
+// Load environment variables from .env file if it exists
+try {
+  if (fs.existsSync('.env')) {
+    require('dotenv').config();
+    console.log('Environment variables loaded from .env file');
+  }
+} catch (error) {
+  console.warn('Error loading .env file:', error.message);
+}
+
+// Run database migration to ensure schema is up to date
+console.log('Running database migration...');
+const migrationResult = runMigration({ verbose: process.env.NODE_ENV !== 'production' });
+if (!migrationResult.success) {
+  console.error('Database migration failed:', migrationResult.message);
+  process.exit(1); // Exit if migration fails
+} else {
+  console.log('Database migration completed successfully');
+}
 
 const app = express();
 
@@ -38,10 +61,13 @@ app.use('/outputs', express.static(STABLE_DIFFUSION_SAVE_PATH));
 // API routes
 app.use('/api/v1/servers', serversRouter);
 app.use('/api/v1', resourcesRouter); // Mounts /loras, /checkpoints
-app.use('/api/v1/civitai', civitaiRouter);
+app.use('/api/v1', civitaiRouter);
 app.use('/api/v1', generationRouter); // Mounts /generate, /queue/jobs/:jobId/status
 app.use('/api/v1/gallery', galleryRouter); // Mount the new gallery routes
 app.use('/api/v1', modelsRouter); // Mount the new models routes
+app.use('/api/v1/downloads', downloadsRouter); // Mount the new downloads routes
+app.use('/api/v1/api-keys', apiKeysRouter); // Register API keys router
+app.use('/api/v2', v2GenerationRouter); // Register v2 generation router
 
 // Basic status endpoint
 app.get('/status', (req, res) => {
@@ -61,6 +87,11 @@ async function startServices() {
     // Initialize the model database
     console.log('Initializing model database...');
     await modelDB.populateModelCache();
+    
+    // Initialize the download queue manager
+    console.log('Initializing download queue manager...');
+    await downloadQueueManager.initialize();
+    console.log('Download queue manager initialized.');
     
     // Start job dispatcher
     console.log('Starting job queue dispatcher...');
@@ -89,6 +120,16 @@ const shutdown = async (signal, value) => {
     if (typeof stopDispatcher === 'function') {
         console.log('[App] Stopping Gradio Job Dispatcher...');
         stopDispatcher();
+    }
+
+    // Close the download queue manager
+    if (downloadQueueManager && typeof downloadQueueManager.close === 'function') {
+        try {
+            await downloadQueueManager.close();
+            console.log('[App] Download queue manager closed.');
+        } catch (error) {
+            console.error('[App] Error closing download queue manager:', error);
+        }
     }
 
     if (readJobQueue && typeof readJobQueue.closeDB === 'function') {

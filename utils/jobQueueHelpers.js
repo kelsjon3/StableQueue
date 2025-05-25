@@ -37,16 +37,33 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_creation ON jobs (status, creation_ti
 `;
 db.exec(schema);
 
-// Check if forge_internal_task_id column exists, and add it if not
-const checkColumn = db.prepare("PRAGMA table_info(jobs)").all();
-const hasInternalTaskIdColumn = checkColumn.some(col => col.name === 'forge_internal_task_id');
-if (!hasInternalTaskIdColumn) {
-    console.log("Adding forge_internal_task_id column to jobs table");
-    try {
-        db.exec("ALTER TABLE jobs ADD COLUMN forge_internal_task_id TEXT;");
-        console.log("Successfully added forge_internal_task_id column");
-    } catch (error) {
-        console.error("Failed to add forge_internal_task_id column:", error);
+// Function to check if a column exists in a table
+function columnExists(tableName, columnName) {
+    const result = db.prepare(`PRAGMA table_info(${tableName})`).all();
+    return result.some(col => col.name === columnName);
+}
+
+// Check for required columns and add them if missing
+const requiredColumns = [
+    { name: 'forge_internal_task_id', type: 'TEXT' },
+    { name: 'app_type', type: 'TEXT', default: '"forge"' },
+    { name: 'source_info', type: 'TEXT' },
+    { name: 'api_key_id', type: 'TEXT' }
+];
+
+for (const column of requiredColumns) {
+    if (!columnExists('jobs', column.name)) {
+        console.log(`Adding ${column.name} column to jobs table`);
+        try {
+            let sql = `ALTER TABLE jobs ADD COLUMN ${column.name} ${column.type}`;
+            if (column.default) {
+                sql += ` DEFAULT ${column.default}`;
+            }
+            db.exec(sql);
+            console.log(`Successfully added ${column.name} column`);
+        } catch (error) {
+            console.error(`Failed to add ${column.name} column:`, error);
+        }
     }
 }
 
@@ -54,8 +71,14 @@ if (!hasInternalTaskIdColumn) {
 
 /**
  * Adds a new job to the queue.
- * @param {object} jobData - Contains target_server_alias and generation_params.
- *                           Example: { target_server_alias: "forge1", generation_params: { prompt: "A cat" } }
+ * @param {object} jobData - Contains target_server_alias, generation_params, and optional fields.
+ *                           Example: { 
+ *                             target_server_alias: "forge1", 
+ *                             generation_params: { prompt: "A cat" },
+ *                             app_type: "forge",
+ *                             source_info: "ui",
+ *                             api_key_id: "abc123"
+ *                           }
  * @returns {object} The full job object as constructed for DB insertion.
  */
 function addJob(jobData) {
@@ -72,15 +95,15 @@ function addJob(jobData) {
         forge_session_hash: null,
         generation_params_json: JSON.stringify(jobData.generation_params || {}),
         result_details_json: null,
-        retry_count: 0
+        retry_count: 0,
+        // Include new fields with defaults if not provided
+        app_type: jobData.app_type || 'forge',
+        source_info: jobData.source_info || 'ui',
+        api_key_id: jobData.api_key_id || null
     };
 
     // Check if forge_internal_task_id column exists
-    const checkColumn = db.prepare("PRAGMA table_info(jobs)").all();
-    const hasInternalTaskIdColumn = checkColumn.some(col => col.name === 'forge_internal_task_id');
-    
-    // Only add forge_internal_task_id if the column exists
-    if (hasInternalTaskIdColumn) {
+    if (columnExists('jobs', 'forge_internal_task_id')) {
         jobRecord.forge_internal_task_id = null;
     }
 
@@ -141,7 +164,11 @@ function getJobById(mobilesdJobId) {
             target_server_alias: row.target_server_alias,
             forge_session_hash: row.forge_session_hash,
             forge_internal_task_id: forgeInternalTaskId,
-            retry_count: row.retry_count
+            retry_count: row.retry_count,
+            // Include new fields with fallbacks
+            app_type: row.app_type || 'forge',
+            source_info: row.source_info || 'ui',
+            api_key_id: row.api_key_id || null
         };
     }
     return null;
@@ -377,20 +404,31 @@ async function updateJobInQueue(jobId, updates) {
  * Gets all jobs with optional filtering and pagination.
  * @param {object} options - Options for filtering and pagination
  * @param {string} options.status - Optional filter by status
+ * @param {string} options.app_type - Optional filter by application type
  * @param {number} options.limit - Optional limit on the number of jobs to return
  * @param {number} options.offset - Optional offset for pagination
  * @param {'DESC'|'ASC'} options.order - Optional sort order, defaults to DESC (newest first)
  * @returns {Array<object>} Array of job objects with parsed JSON fields
  */
 function getAllJobs(options = {}) {
-    const { status, limit, offset, order = 'DESC' } = options;
+    const { status, app_type, limit, offset, order = 'DESC' } = options;
     
     let query = 'SELECT * FROM jobs';
     const queryParams = [];
+    const conditions = [];
     
     if (status) {
-        query += ' WHERE status = ?';
+        conditions.push('status = ?');
         queryParams.push(status);
+    }
+    
+    if (app_type) {
+        conditions.push('app_type = ?');
+        queryParams.push(app_type);
+    }
+    
+    if (conditions.length > 0) {
+        query += ' WHERE ' + conditions.join(' AND ');
     }
     
     query += ` ORDER BY creation_timestamp ${order === 'ASC' ? 'ASC' : 'DESC'}`;
@@ -417,7 +455,11 @@ function getAllJobs(options = {}) {
     return rows.map(row => ({
         ...row,
         generation_params: JSON.parse(row.generation_params_json || '{}'),
-        result_details: row.result_details_json ? JSON.parse(row.result_details_json) : null
+        result_details: row.result_details_json ? JSON.parse(row.result_details_json) : null,
+        // Include new fields with fallbacks
+        app_type: row.app_type || 'forge',
+        source_info: row.source_info || 'ui',
+        api_key_id: row.api_key_id || null
     }));
 }
 
@@ -487,5 +529,6 @@ module.exports = {
     getAllJobs,
     deleteJob,
     cancelJob,
+    columnExists, // Export this utility function
     closeDB: () => db.close() // Add a function to close the database connection
 }; 

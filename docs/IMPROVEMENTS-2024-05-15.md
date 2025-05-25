@@ -4,14 +4,27 @@
 
 This document outlines significant improvements made to the MobileSD application on May 15, 2024, focusing on fixing several critical issues:
 
-1. **Duplicate Images Issue**: Fixed the problem where multiple copies of the same image were being saved and displayed in the gallery (8 images for 2 prompts, with 4 duplicates per prompt).
-2. **Progress Bar Issues**: Resolved issues with the progress bar not showing incremental updates (only jumping from 0% to 100%).
+1. **Progress Bar Enhancement**: Resolved issues with the progress bar not showing incremental updates (only jumping from 0% to 100%).
+2. **Duplicate Images Issue**: Fixed the problem where multiple copies of the same image were being saved and displayed in the gallery.
 3. **Database Constraint Errors**: Fixed "CHECK constraint failed: status IN..." errors by removing custom status fields.
-4. **Job Status Tracking**: Enhanced monitoring to better track job state throughout the generation process.
+4. **Schema Compatibility**: Added backward compatibility for database schema changes.
 
 ## Technical Details of Fixes
 
-### 1. Duplicate Image Prevention
+### 1. Progress Bar Enhancement ✅
+
+The progress bar now shows proper incremental updates through several mechanisms:
+
+#### Dual-Source Progress Updates
+- **SSE Events**: Process real-time events from Forge's SSE stream
+- **Active Polling**: Added a new polling mechanism that directly queries Forge's `/internal/progress` endpoint
+- **Artificial Updates**: For UI responsiveness, gradual artificial updates when no progress data is received
+
+#### Status
+- **Working**: Smooth incremental progress from 0% to 100%
+- **Future Work**: Preview image extraction still needs refinement
+
+### 2. Duplicate Image Prevention ✅
 
 - Added state tracking with `hasCompletedProcessing` flag to prevent duplicate event processing
 - Implemented image de-duplication using a set of unique image paths
@@ -19,28 +32,22 @@ This document outlines significant improvements made to the MobileSD application
 - Added clear logging to show when duplicates are detected and skipped
 - Fixed race conditions in the image processing pipeline
 
-### 2. Progress Bar Enhancement
-
-The progress bar now shows proper incremental updates through several mechanisms:
-
-#### Dual-Source Progress Updates
-- **SSE Events**: Continue to process real-time events from Forge's SSE stream
-- **Active Polling**: Added a new polling mechanism that directly queries Forge's `/internal/progress` endpoint
-- **Artificial Updates**: For UI responsiveness, gradual artificial updates when no progress data is received
-
-#### Preview Image Extraction
-- Enhanced extraction of preview images from multiple sources in Forge's responses
-- Added preview image support from polling data
-- Improved preview image handling and display in the UI
-
-### 3. Database Constraint Fixes
+### 3. Database Constraint Fixes ✅
 
 - Removed the custom `processing_completed` status that caused database errors
 - Switched to using `result_details` JSON field to track job state instead
 - Ensured proper status transitions through the job lifecycle
 - Added validation to prevent invalid status values
 
-### 4. Enhanced Logging System
+### 4. Database Schema Compatibility ✅
+
+- **Dynamic Schema Detection**: Added code to check for the presence of new columns
+- **Automatic Migration**: System automatically adds missing columns if needed
+- **Fallback Mechanism**: If columns can't be added, data is stored in JSON fields as fallback
+- **Backward Compatible**: Works with both old and new database schemas
+- **Dynamic SQL Generation**: SQL statements dynamically adapt to available columns
+
+### 5. Enhanced Logging System ✅
 
 Implemented a comprehensive logging system that makes debugging easier:
 
@@ -52,14 +59,41 @@ Implemented a comprehensive logging system that makes debugging easier:
 - **Context Information**: Each log entry includes job ID, event type, and relevant data
 - **Truncated Data**: Large response data is truncated to avoid overwhelming logs
 
+## Task ID Handling Improvements
+
+The handling of Forge's task ID has been significantly improved:
+
+1. **Multiple Storage Locations**:
+   - In dedicated `forge_internal_task_id` column (when available)
+   - In `result_details` JSON field (as backup)
+   - In memory state during active monitoring sessions
+
+2. **Format Standardization**:
+   - Automatic detection of different task ID formats
+   - Standardization to expected format: `task(id)` without extra quotes
+   - Consistent access across system components
+
+3. **Request Format Fixes**:
+   - Changed from GET to POST requests based on HAR analysis
+   - Properly formatted the payload as `{"id_task":"task(id)","id_live_preview":-1}`
+   - Added proper Content-Type headers for JSON
+
 ## Results
 
 After these improvements:
 - Progress bar now shows smooth incremental updates from 0% to 100%
-- Preview images appear more consistently during generation
-- Gallery shows the correct number of unique images (reduced from 8 to 6 for 2 prompts)
+- Gallery shows the correct number of unique images
 - Database errors have been eliminated
-- The system is more resilient to connection issues with Forge
+- The system works with both new and existing database schemas
+- Communication with Forge is more reliable
+
+## Next Steps
+
+While significant progress has been made, there are still areas for future improvement:
+
+1. **Preview Images**: Further work needed to reliably extract and display preview images
+2. **UI Enhancements**: Additional UI improvements for job status display
+3. **Error Recovery**: More sophisticated error recovery mechanisms
 
 ## Implementation Notes
 

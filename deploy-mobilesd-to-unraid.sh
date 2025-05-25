@@ -108,7 +108,11 @@ echo -e "${YELLOW}Step 3.5: Clearing the job queue before deployment...${NC}"
 clear_job_queue
 
 echo -e "${YELLOW}Step 4: Deploying on Unraid server...${NC}"
-ssh "${UNRAID_USER}@${UNRAID_HOST}" "bash -s" << EOF_UNRAID_SCRIPT
+# Export environment variables from .env for the remote script
+export CIVITAI_API_KEY
+
+# Pass relevant environment variables to the remote script
+ssh "${UNRAID_USER}@${UNRAID_HOST}" "CIVITAI_API_KEY=\"${CIVITAI_API_KEY}\" bash -s" << EOF_UNRAID_SCRIPT
     set -e
     echo "--- Running on Unraid: $(hostname) ---"
     cd "${UNRAID_APP_DIR}"
@@ -140,6 +144,8 @@ services:
       - LORA_PATH=/app/models/Lora
       - CHECKPOINT_PATH=/app/models/Stable-diffusion
       - NODE_ENV=production
+      # Add Civitai API key from host .env
+      - CIVITAI_API_KEY=${CIVITAI_API_KEY}
     restart: unless-stopped
 EOF_COMPOSE
 

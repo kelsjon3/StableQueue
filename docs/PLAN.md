@@ -91,13 +91,45 @@
         *   Downloads and saves images to `STABLE_DIFFUSION_SAVE_PATH` on completion.
         *   Updates job status to `completed` or `failed` accordingly.
     *   **Enhanced Monitoring with Polling:**
-        *   **Status: IMPLEMENTED**
+        *   **Status: IMPLEMENTED ✅**
         *   **Dual Approach:** Uses both SSE events and direct polling to ensure reliable progress updates.
         *   **Polling Mechanism:** Periodically queries Forge's `/internal/progress` endpoint for more accurate progress data.
         *   **Preview Image Extraction:** Actively retrieves preview images from both SSE events and polling responses.
         *   **Improved Progress Reporting:** Provides smoother progress updates to the UI by combining data from both sources.
         *   **Fallback Strategy:** Continues functioning even when SSE connection has issues or doesn't provide adequate updates.
         *   **State Tracking:** Intelligently manages state to avoid duplicate processing of images or events.
+    *   **Robustness Considerations:**
+        *   **Status: IMPLEMENTED ✅**
+        *   Added utility scripts for queue management (clearing, reset).
+        *   Implemented timestamp filtering to avoid processing stale jobs on restart.
+        *   Created error handling and logging for better debugging.
+        *   **Improved Logging System:**
+            *   **Status: IMPLEMENTED ✅**
+            *   Enhanced logging with specific prefixes to track communication flow:
+                *   `[FORGE→SERVER]`: Events and data coming from Forge to MobileSD
+                *   `[SERVER→CLIENT]`: Updates sent from MobileSD to browser clients
+                *   `[POLL]`: Information about the polling operations
+                *   `[ARTIFICIAL]`: Artificial progress updates when real progress is delayed
+            *   Better error handling with detailed context information
+            *   Consolidated job status tracking to prevent issues with duplicated status updates
+        *   **Duplicate Image Prevention:**
+            *   **Status: IMPLEMENTED ✅**
+            *   Added state tracking with a `hasCompletedProcessing` flag to prevent duplicate processing
+            *   Implemented image de-duplication using a set of unique image paths
+            *   Fixed race conditions that caused multiple copies of the same image
+        *   **Database Constraint Error Handling:**
+            *   **Status: IMPLEMENTED ✅**
+            *   Fixed "CHECK constraint failed: status IN..." errors by removing custom status fields
+            *   Implemented using the result_details JSON field to track job state instead
+        *   **Database Schema Compatibility:**
+            *   **Status: IMPLEMENTED ✅**
+            *   Added backward compatibility for schema changes
+            *   Dynamically detects column presence and implements fallback mechanisms
+            *   Stores data in JSON fields when columns don't exist
+        *   **Task ID Management:**
+            *   **Status: IMPLEMENTED ✅**
+            *   Improved handling of Forge's task ID with format standardization
+            *   Implemented multiple storage locations (dedicated column, JSON fields, and in-memory state)
 5.  **Robustness Considerations:**
     *   **Status: PARTIALLY IMPLEMENTED**
     *   Added utility scripts for queue management (clearing, reset).
@@ -257,9 +289,9 @@
     *   Implement image metadata association with original generation jobs.
     *   Add support for sorting and filtering.
 2.  **Update Frontend to Use Job Queue System:**
-    *   Modify the "Generate" button to add jobs to the queue.
-    *   Implement job status polling using the `/api/v1/queue/jobs/:job_id/status` endpoint.
-    *   Create UI elements to display job progress and completion.
+    *   ✅ COMPLETED: Modified the "Generate" button to add jobs to the queue
+    *   ✅ COMPLETED: Implemented smooth progress reporting from 0-100%
+    *   ✅ COMPLETED: Created UI elements to display job progress and completion
 3.  **Develop Queue Management UI:**
     *   Create a dedicated tab to view and manage the job queue.
     *   Implement functionality to cancel or delete jobs.
@@ -272,11 +304,12 @@
     *   Implement automatic model detection and download during job processing.
     *   Create a user-friendly UI for browsing and managing Civitai models.
 5.  **Improve Error Handling and Robustness:**
-    *   Add better error reporting in the UI.
-    *   Implement more extensive logging for debugging.
+    *   ✅ COMPLETED: Added better error reporting in the UI
+    *   ✅ COMPLETED: Implemented more extensive logging for debugging
+    *   ✅ COMPLETED: Added enhanced progress tracking and duplicate prevention
     *   Add automatic recovery mechanisms for database corruption or server disconnections.
 6.  **Documentation and Testing:**
-    *   Update API documentation for all endpoints.
+    *   ✅ COMPLETED: Updated project plan documentation
     *   Create comprehensive testing procedures for different scenarios.
     *   Document common issues and solutions.
 
@@ -297,6 +330,14 @@
     *   **In-Memory Caching:** Balancing database queries with in-memory caching significantly improves performance.
     *   **Atomic Updates:** Ensuring that database updates are atomic prevents corrupting the job queue state.
     *   **Backup Mechanisms:** Implementing database backup before destructive operations provides safety nets.
+5.  **Progress Tracking:**
+    *   **Dual Sources:** Combining SSE events with active polling provides more reliable progress updates.
+    *   **Incremental Updates:** A properly implemented progress bar should show smooth incremental updates from 0-100%.
+    *   **State Management:** A `hasCompletedProcessing` flag helps prevent duplicate processing of completed jobs.
+6.  **Deployment Considerations:**
+    *   **Cross-Platform Compatibility:** Ensure file paths work correctly across different operating systems.
+    *   **Database Migrations:** Have a strategy for schema changes that maintains backward compatibility.
+    *   **Logging Directionality:** Adding direction indicators ([FORGE→SERVER], [SERVER→CLIENT], [POLL]) helps with debugging.
 
 ## IX. Models Tab Implementation Plan
 
@@ -509,3 +550,196 @@ Add a new "Models" tab to display both checkpoints and LoRAs with their preview 
     *   **Action:** Modify the metadata creation logic to use the format matching Forge extension (`description`, `sd version`, etc.).
     *   **Action:** Add logic to check for and preserve existing metadata when downloading new models.
     *   **Action:** Ensure consistent naming for preview images compatible with Forge UI. 
+
+## X. Unified Queue System: Multi-Application Support (NEW)
+
+### Overview
+The MobileSD application will evolve from a Forge-specific queue system to a unified queue that can manage jobs from multiple AI applications including Forge, ComfyUI, and potentially others. This approach will prevent GPU overload by orchestrating all jobs through a single resource-aware queue manager.
+
+### Architecture Changes
+
+1. **Unified Job Schema Extension:**
+   - Add `app_type` field to job records (e.g., "forge", "comfyui")
+   - Implement application-specific parameter schemas within the `generation_params` object
+   - Standardize common fields like priority, resource requirements, and timestamps
+
+2. **Modular Dispatcher System:**
+   - Create a dispatcher registry to manage multiple application dispatchers
+   - Implement application-specific dispatchers that handle the unique API requirements of each platform
+   - Add dispatcher selection logic based on job's `app_type`
+   - Retain all monitoring and progress tracking functionality
+
+3. **Extensions Development:**
+   - Create Forge extension:
+     - Add "Queue in MobileSD" button to Forge UI
+     - Capture complete generation parameters
+     - Send parameters to MobileSD API
+   - Create ComfyUI extension:
+     - Add "Queue in MobileSD" option to workflow execution
+     - Serialize workflow and parameters
+     - Send to MobileSD API
+   - Define consistent API contract for all extensions
+
+4. **Queue Manager Enhancements:**
+   - Implement resource monitoring for more intelligent job dispatching
+   - Add GPU memory requirement estimation
+   - Develop priority system that balances job importance with resource availability
+   - Build application-specific adapters that normalize progress reporting
+
+### Implementation Plan
+
+1. **Phase 1: Core Architecture**
+   - Extend job database schema to include `app_type` field
+   - Create dispatcher registry and selection logic
+   - Implement standardized job submission API endpoint
+   - Update UI to display application type in queue view
+
+2. **Phase 2: Forge Extension**
+   - Create basic extension structure (Python backend, JS frontend)
+   - Add UI elements to Forge interface
+   - Implement parameter capture from Forge UI
+   - Create secure communication with MobileSD API
+
+3. **Phase 3: Forge Dispatcher Refinement**
+   - Update existing dispatcher to work with modular system
+   - Enhance monitoring to maintain consistent progress reporting
+   - Implement resource usage tracking specific to Forge
+
+4. **Phase 4: ComfyUI Support**
+   - Research ComfyUI API and workflow structure
+   - Develop ComfyUI extension
+   - Create ComfyUI-specific dispatcher
+   - Implement progress monitoring for ComfyUI jobs
+
+5. **Phase 5: Resource Management**
+   - Implement GPU memory monitoring
+   - Develop intelligent job scheduling based on resource requirements
+   - Add priority system that considers both user preference and resource availability
+   - Create resource reservation system to prevent conflicts
+
+### Extension Technical Requirements
+
+#### Forge Extension
+
+1. **Structure:**
+   ```
+   mobilesdqueue/
+   ├── scripts/
+   │   └── mobilesdqueue.py  (Main Python code)
+   ├── javascript/
+   │   └── mobilesdqueue.js  (Frontend integration)
+   └── install.py            (Installation script)
+   ```
+
+2. **Features:**
+   - Add "Queue in MobileSD" button next to "Generate" button
+   - Capture all generation parameters, including:
+     - Model selection (checkpoint, VAE, etc.)
+     - Prompt and negative prompt
+     - Sampling parameters (steps, CFG, method)
+     - Size and batch settings
+     - LoRA configurations
+     - Other extension configurations when possible
+   - Configuration panel for MobileSD server URL and authentication
+   - Optional priority setting
+   - Job status display for queued jobs
+
+#### ComfyUI Extension
+
+1. **Structure:**
+   ```
+   mobilesdqueue-comfyui/
+   ├── web/
+   │   └── js/
+   │       └── mobilesdqueue.js  (UI integration)
+   └── __init__.py               (Python initialization)
+   ```
+
+2. **Features:**
+   - Add "Queue in MobileSD" option to workflow context menu
+   - Serialize complete workflow including node configurations
+   - Extract key parameters for queue display (model, size, steps)
+   - Allow priority setting
+   - Provide feedback on queue position and status
+
+### API Endpoints
+
+1. **Enhanced Job Submission:**
+   ```
+   POST /api/v2/generate
+   {
+     "app_type": "forge|comfyui",
+     "target_server_alias": "server1",
+     "priority": 1,
+     "generation_params": {
+       // Application-specific parameters
+     },
+     "metadata": {
+       // Additional information for display/tracking
+     }
+   }
+   ```
+
+2. **Application-Specific Status Reporting:**
+   ```
+   GET /api/v2/queue/jobs/:jobId/status
+   {
+     "mobilesd_job_id": "...",
+     "app_type": "forge|comfyui",
+     "status": "pending|processing|completed|failed",
+     "progress": 45,
+     "application_specific_data": {
+       // Fields that vary by application type
+     },
+     // Standard fields...
+   }
+   ```
+
+### Timeline and Milestones
+
+1. **Research & Planning (2 weeks)**
+   - Analysis of ComfyUI API and workflow structure
+   - Design of extended database schema
+   - Architecture document for modular dispatcher system
+
+2. **Core Implementation (3 weeks)**
+   - Database schema extension
+   - Dispatcher registry and selection logic
+   - API endpoint updates
+   - UI modifications for multi-application support
+
+3. **Forge Extension Development (2 weeks)**
+   - Basic extension structure
+   - UI integration
+   - Parameter capture and submission
+   - Testing and refinement
+
+4. **ComfyUI Support (3 weeks)**
+   - Extension development
+   - Dispatcher implementation
+   - Progress monitoring
+   - Testing with various workflow types
+
+5. **Resource Management (2 weeks)**
+   - GPU monitoring implementation
+   - Intelligent scheduling
+   - Priority system refinement
+   - Testing under load conditions
+
+### Future Extensions
+
+Beyond Forge and ComfyUI, the system can be extended to support other AI applications:
+
+1. **Potential Additional Applications:**
+   - Automatic1111 Web UI (original)
+   - InvokeAI
+   - Kohya_ss (for training)
+   - RunwayML
+   - Kandinsky
+
+2. **Advanced Features:**
+   - Cross-application workflows (pipeline jobs through multiple AI tools)
+   - Resource forecasting based on job history
+   - Machine learning for optimal job scheduling
+   - Remote execution on networked GPUs
+   - Distributed processing across multiple machines 

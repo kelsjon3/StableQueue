@@ -693,7 +693,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function showView(viewToShow, buttonToActivate) {
         // Hide all views
-        const views = ['generator-view', 'server-setup-view', 'gallery-view', 'queue-view', 'models-view'];
+        const views = ['generator-view', 'server-setup-view', 'gallery-view', 'queue-view', 'models-view', 'downloads-view'];
         views.forEach(view => {
             const element = document.getElementById(view);
             if (element) {
@@ -953,6 +953,561 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- INITIALIZATION ---
+
+    // Civitai Image Info Fetching and Display
+    async function fetchCivitaiImageInfo() {
+        const civitaiImageIdInput = document.getElementById('civitai-image-id');
+        
+        if (!civitaiImageIdInput || !civitaiImageIdInput.value.trim()) {
+            alert('Please enter a Civitai Image ID');
+            return;
+        }
+        
+        const imageId = civitaiImageIdInput.value.trim();
+        
+        // Create or get modal element
+        let modalElement = document.getElementById('civitai-image-modal');
+        if (!modalElement) {
+            modalElement = document.createElement('div');
+            modalElement.id = 'civitai-image-modal';
+            modalElement.classList.add('modal');
+            
+            const modalContent = document.createElement('div');
+            modalContent.classList.add('modal-content', 'civitai-modal-content');
+            
+            const closeBtn = document.createElement('span');
+            closeBtn.classList.add('close');
+            closeBtn.innerHTML = '&times;';
+            closeBtn.onclick = () => { modalElement.style.display = 'none'; };
+            
+            const contentContainer = document.createElement('div');
+            contentContainer.id = 'civitai-modal-container';
+            
+            modalContent.appendChild(closeBtn);
+            modalContent.appendChild(contentContainer);
+            modalElement.appendChild(modalContent);
+            document.body.appendChild(modalElement);
+            
+            // Close modal when clicking outside
+            window.onclick = (event) => {
+                if (event.target === modalElement) {
+                    modalElement.style.display = 'none';
+                }
+            };
+
+            // Close with Escape key
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && modalElement.style.display === 'block') {
+                    modalElement.style.display = 'none';
+                }
+            });
+        }
+        
+        const contentContainer = document.getElementById('civitai-modal-container');
+        contentContainer.innerHTML = `
+            <div class="loader-container">
+                <div class="spinner-border" role="status"></div>
+                <p>Fetching image information from Civitai...</p>
+            </div>
+        `;
+        
+        // Show the modal
+        modalElement.style.display = 'block';
+        
+        try {
+            console.log(`Fetching image info for Civitai image ID: ${imageId}`);
+            const response = await fetch(`/api/v1/civitai/image-info?imageId=${imageId}`);
+            
+            // Check if response is OK
+            if (!response.ok) {
+                throw new Error(`Server returned status ${response.status}: ${response.statusText}`);
+            }
+            
+            // Log response headers to see content type
+            console.log('Response headers:');
+            response.headers.forEach((value, key) => {
+                console.log(`  ${key}: ${value}`);
+            });
+            
+            // Get response text first to validate it
+            const responseText = await response.text();
+            console.log(`Response text length: ${responseText.length}`);
+            console.log(`Response text preview: ${responseText.substring(0, 200)}`);
+            
+            // Try to parse as JSON
+            let data;
+            try {
+                console.log('Attempting to parse response as JSON...');
+                data = JSON.parse(responseText);
+                console.log('JSON parse successful');
+            } catch (parseError) {
+                console.error('Failed to parse response as JSON:', parseError);
+                console.error('Parse error name:', parseError.name);
+                console.error('Parse error message:', parseError.message);
+                console.error('Parse error position:', parseError.message.match(/position (\d+)/)?.[1] || 'unknown');
+                
+                // Log more details about the first few characters
+                if (responseText.length > 0) {
+                    console.error('First 10 characters as codes:');
+                    for (let i = 0; i < Math.min(10, responseText.length); i++) {
+                        console.error(`  Char ${i}: "${responseText[i]}" (code: ${responseText.charCodeAt(i)})`);
+                    }
+                }
+                
+                // Show more context around position 1 (where the error is reported)
+                const position = parseError.message.match(/position (\d+)/)?.[1] || 1;
+                const start = Math.max(0, parseInt(position) - 10);
+                const end = Math.min(responseText.length, parseInt(position) + 10);
+                console.error(`Context around error position (${position}):`);
+                console.error(`  "${responseText.substring(start, end)}"`);
+                
+                console.error('Raw response:', responseText.substring(0, 500) + '...');
+                throw new Error(`Failed to parse server response: ${parseError.message}`);
+            }
+            
+            if (!data.success) {
+                contentContainer.innerHTML = `
+                    <div class="error-container">
+                        <div class="error-icon">❌</div>
+                        <h3>Error</h3>
+                        <p>${data.message}</p>
+                        ${data.details ? `<p class="error-details">${data.details}</p>` : ''}
+                        <p class="help-text">Please check the image ID and try again. Make sure you're using a valid Civitai image ID.</p>
+                        <button class="btn btn-secondary close-btn">Close</button>
+                    </div>
+                `;
+                
+                // Add event listener to close button
+                const closeBtn = contentContainer.querySelector('.close-btn');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => {
+                        modalElement.style.display = 'none';
+                    });
+                }
+                return;
+            }
+            
+            // Show API key missing warning if applicable
+            let apiKeyWarning = '';
+            if (data.apiKeyMissing) {
+                apiKeyWarning = `
+                    <div class="api-key-warning">
+                        <i class="warning-icon">⚠️</i>
+                        <p>Civitai API key is not configured. Some features may be limited or unavailable. 
+                        Contact your administrator to set up the CIVITAI_API_KEY in the server environment.</p>
+                    </div>
+                `;
+            }
+            
+            // Extract data from response
+            const { image, generationParams, resources, source } = data;
+            
+            // Show data source information if using scraping fallback
+            let sourceInfoHtml = '';
+            if (source === 'scraped') {
+                sourceInfoHtml = `
+                    <div class="source-info">
+                        <i class="info-icon">ℹ️</i>
+                        <p>This information was extracted using fallback methods because the Civitai API returned limited data. 
+                        Some details may be incomplete.</p>
+                    </div>
+                `;
+            }
+
+            // Create HTML for the modal content
+            const imageHtml = `
+                <div class="civitai-image-section">
+                    <img src="${image.url}" alt="Civitai Image" class="civitai-preview-image" loading="eager">
+                    <div class="civitai-image-metadata">
+                        <span>${image.width || 0} × ${image.height || 0}</span>
+                        <span>${image.nsfw ? '🔞 NSFW' : '✓ SFW'}</span>
+                    </div>
+                </div>
+            `;
+
+            // Display related images if available
+            let relatedImagesHtml = '';
+            if (data.relatedImages && data.relatedImages.length > 0) {
+                const relatedImageCards = data.relatedImages.map(img => `
+                    <div class="related-image-card">
+                        <img src="${img.url}" alt="Related image" loading="lazy" 
+                            data-id="${img.id}"
+                            class="related-image-preview ${img.nsfw ? 'nsfw-image' : ''}">
+                        ${img.nsfw ? '<div class="nsfw-badge">NSFW</div>' : ''}
+                    </div>
+                `).join('');
+                
+                relatedImagesHtml = `
+                    <div class="related-images-section">
+                        <h3>Related Images</h3>
+                        <div class="related-images-grid">
+                            ${relatedImageCards}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Format generation parameters
+            let paramsHtml = '';
+            if (generationParams) {
+                paramsHtml = `
+                    <div class="civitai-params">
+                        <h3>Generation Parameters</h3>
+                        <div class="param-group">
+                            <h4>Prompts</h4>
+                            <div class="param-item">
+                                <label>Positive Prompt:</label>
+                                <div class="param-value">${escapeHtml(generationParams.positive_prompt) || 'Not available'}</div>
+                            </div>
+                            <div class="param-item">
+                                <label>Negative Prompt:</label>
+                                <div class="param-value">${escapeHtml(generationParams.negative_prompt) || 'Not available'}</div>
+                            </div>
+                        </div>
+                        <div class="param-group">
+                            <h4>Settings</h4>
+                            <div class="params-grid">
+                                <div class="param-item">
+                                    <label>Steps:</label>
+                                    <div class="param-value">${generationParams.steps || 'N/A'}</div>
+                                </div>
+                                <div class="param-item">
+                                    <label>Sampler:</label>
+                                    <div class="param-value">${generationParams.sampler || 'N/A'}</div>
+                                </div>
+                                <div class="param-item">
+                                    <label>CFG Scale:</label>
+                                    <div class="param-value">${generationParams.cfg_scale || 'N/A'}</div>
+                                </div>
+                                <div class="param-item">
+                                    <label>Size:</label>
+                                    <div class="param-value">${generationParams.width || 'N/A'} × ${generationParams.height || 'N/A'}</div>
+                                </div>
+                                <div class="param-item">
+                                    <label>Seed:</label>
+                                    <div class="param-value">${generationParams.seed || 'N/A'}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Format resources (models, LoRAs, etc.)
+            let resourcesHtml = '';
+            if (resources && resources.length > 0) {
+                // Group resources by type
+                const groupedResources = resources.reduce((acc, resource) => {
+                    const type = resource.type || 'other';
+                    if (!acc[type]) acc[type] = [];
+                    acc[type].push(resource);
+                    return acc;
+                }, {});
+                
+                // Generate HTML for each resource type
+                const resourceSections = Object.entries(groupedResources).map(([type, typeResources]) => {
+                    const resourceCards = typeResources.map(resource => {
+                        const isLocal = resource.isLocal;
+                        const canDownload = !isLocal && (resource.downloadUrl || (resource.id && resource.type));
+                        const resourceIconMap = {
+                            'checkpoint': '🧠',
+                            'lora': '🎯',
+                            'textualinversion': '📝',
+                            'other': '🔧'
+                        };
+                        const icon = resourceIconMap[resource.type] || resourceIconMap.other;
+
+                        return `
+                            <div class="resource-card ${resource.type}">
+                                <div class="status-badge ${isLocal ? 'local' : 'not-local'}">
+                                    ${isLocal ? 'Installed' : 'Not Installed'}
+                                </div>
+                                <div class="resource-info">
+                                    <h4>${icon} ${escapeHtml(resource.name || resource.resourceName || 'Unknown Resource')}</h4>
+                                    ${resource.version ? `<div class="version">Version: ${escapeHtml(resource.version)}</div>` : ''}
+                                    ${resource.fileSizeKB ? `<div class="resource-size">Size: ${formatFileSize(resource.fileSizeKB * 1024)}</div>` : ''}
+                                    ${resource.type === 'lora' && resource.strength ? 
+                                        `<div class="strength">Strength: ${resource.strength}</div>` : ''}
+                                    ${resource.trainedWords && resource.trainedWords.length ? 
+                                        `<div class="trained-words">Trigger words: ${escapeHtml(resource.trainedWords.join(', '))}</div>` : ''}
+                                </div>
+                                ${canDownload ? `
+                                    <div class="resource-actions">
+                                        <button class="download-resource" 
+                                            data-id="${resource.id || resource.civitaiModelVersionId}" 
+                                            data-type="${resource.type}" 
+                                            data-name="${escapeHtml(resource.name || resource.resourceName || 'Unknown')}"
+                                            data-model-id="${resource.modelId || resource.civitaiModelId || ''}"
+                                        >Add to Download Queue</button>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        `;
+                    }).join('');
+                    
+                    // Capitalize type name for display
+                    const typeName = type.charAt(0).toUpperCase() + type.slice(1);
+                    
+                    return `
+                        <div class="resource-type-section">
+                            <h5>${typeName}s (${typeResources.length})</h5>
+                            <div class="resources-list">
+                                ${resourceCards}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+                resourcesHtml = `
+                    <div class="civitai-resources">
+                        <h3>Resources</h3>
+                        ${resourceSections}
+                    </div>
+                `;
+            }
+            
+            // Add a link to view on Civitai
+            const civitaiLink = `<a href="https://civitai.com/images/${imageId}" target="_blank" class="btn btn-secondary">View on Civitai</a>`;
+            
+            // Combine all sections
+            contentContainer.innerHTML = `
+                ${apiKeyWarning}
+                ${sourceInfoHtml}
+                ${imageHtml}
+                ${relatedImagesHtml}
+                <div class="civitai-info-section">
+                    <div class="actions-bar">
+                        <button id="populate-form-btn" class="btn btn-primary">Populate Form with Parameters</button>
+                        ${civitaiLink}
+                    </div>
+                    ${paramsHtml}
+                    ${resourcesHtml || '<div class="no-resources">No resources information available for this image.</div>'}
+                </div>
+            `;
+            
+            // Add event listener to populate form button
+            const populateBtn = document.getElementById('populate-form-btn');
+            if (populateBtn && generationParams) {
+                populateBtn.addEventListener('click', () => {
+                    populateFormWithCivitaiParams(generationParams);
+                    
+                    // Show a toast notification rather than an alert
+                    const toast = document.createElement('div');
+                    toast.className = 'toast success-toast';
+                    toast.innerHTML = `<div class="toast-content">✓ Form populated with image parameters</div>`;
+                    document.body.appendChild(toast);
+                    
+                    // Animate toast appearance
+                    setTimeout(() => {
+                        toast.classList.add('show');
+                        setTimeout(() => {
+                            toast.classList.remove('show');
+                            setTimeout(() => {
+                                document.body.removeChild(toast);
+                            }, 300);
+                        }, 3000);
+                    }, 10);
+                });
+            }
+            
+            // Add event listeners to download buttons
+            const downloadBtns = document.querySelectorAll('.download-resource');
+            downloadBtns.forEach(btn => {
+                btn.addEventListener('click', async function(e) {
+                    e.preventDefault();
+                    const versionId = this.getAttribute('data-id');
+                    const resourceType = this.getAttribute('data-type');
+                    const resourceName = this.getAttribute('data-name');
+                    
+                    if (!versionId || !resourceType) {
+                        alert('Missing resource information for download');
+                        return;
+                    }
+                    
+                    // Change button state to prevent double-clicks
+                    this.disabled = true;
+                    this.innerHTML = '⏳ Adding to Queue...';
+                    
+                    try {
+                        const response = await fetch('/api/v1/civitai/download-model', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                civitaiModelVersionId: versionId,
+                                targetType: resourceType,
+                                priority: 1
+                            })
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            this.innerHTML = '✓ Added to Queue';
+                            this.classList.add('success');
+                            
+                            // Show a toast notification
+                            const toast = document.createElement('div');
+                            toast.className = 'toast success-toast';
+                            toast.innerHTML = `<div class="toast-content">✓ Added ${resourceName} to download queue</div>`;
+                            document.body.appendChild(toast);
+                            
+                            // Animate toast appearance
+                            setTimeout(() => {
+                                toast.classList.add('show');
+                                setTimeout(() => {
+                                    toast.classList.remove('show');
+                                    setTimeout(() => {
+                                        document.body.removeChild(toast);
+                                    }, 300);
+                                }, 3000);
+                            }, 10);
+                        } else {
+                            this.innerHTML = '❌ Failed';
+                            this.classList.add('error');
+                            alert(`Failed to add to queue: ${result.message}`);
+                        }
+                    } catch (error) {
+                        console.error('Error adding to download queue:', error);
+                        this.innerHTML = '❌ Error';
+                        this.classList.add('error');
+                        alert(`Error: ${error.message}`);
+                    }
+                });
+            });
+            
+            // Enable image zoom on click
+            const previewImage = contentContainer.querySelector('.civitai-preview-image');
+            if (previewImage) {
+                previewImage.addEventListener('click', function() {
+                    window.open(this.src, '_blank');
+                });
+            }
+            
+            // Add event listeners to related images
+            const relatedImages = contentContainer.querySelectorAll('.related-image-preview');
+            if (relatedImages.length > 0) {
+                relatedImages.forEach(img => {
+                    img.addEventListener('click', function() {
+                        const newImageId = this.getAttribute('data-id');
+                        if (newImageId) {
+                            // Update the input field with the new image ID
+                            const civitaiImageIdInput = document.getElementById('civitai-image-id');
+                            if (civitaiImageIdInput) {
+                                civitaiImageIdInput.value = newImageId;
+                                
+                                // Show loading state
+                                contentContainer.innerHTML = `
+                                    <div class="loader-container">
+                                        <div class="spinner-border" role="status"></div>
+                                        <p>Loading related image...</p>
+                                    </div>
+                                `;
+                                
+                                // Fetch the new image data
+                                fetchCivitaiImageInfo();
+                            }
+                        }
+                    });
+                });
+            }
+        } catch (error) {
+            console.error('Error fetching Civitai image info:', error);
+            
+            // Display a user-friendly error
+            contentContainer.innerHTML = `
+                <div class="error-container">
+                    <div class="error-icon">❌</div>
+                    <h3>Failed to fetch image information</h3>
+                    <p>${error.message}</p>
+                    <p class="help-text">This could be due to:</p>
+                    <ul class="error-help-list">
+                        <li>Invalid or non-existent image ID</li>
+                        <li>Network connection issues</li>
+                        <li>Civitai API may be down or rate-limiting requests</li>
+                        <li>The server may not have a valid Civitai API key configured</li>
+                    </ul>
+                    <p>Please try again later or with a different image ID.</p>
+                    <button class="btn btn-secondary close-btn">Close</button>
+                </div>
+            `;
+            
+            // Add event listener to close button
+            const closeBtn = contentContainer.querySelector('.close-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    modalElement.style.display = 'none';
+                });
+            }
+        }
+    }
+
+    // Helper function to format file size
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        
+        return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    // Helper function to escape HTML
+    function escapeHtml(unsafe) {
+        if (!unsafe) return '';
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    // Function to populate the form with generation parameters from Civitai
+    function populateFormWithCivitaiParams(params) {
+        // Only populate if we have params
+        if (!params) return;
+        
+        // Map the form fields to the Civitai parameters
+        if (params.positive_prompt && positivePromptInput) {
+            positivePromptInput.value = params.positive_prompt;
+        }
+        
+        if (params.negative_prompt && negativePromptInput) {
+            negativePromptInput.value = params.negative_prompt;
+        }
+        
+        if (params.steps && stepsInput) {
+            stepsInput.value = params.steps;
+        }
+        
+        if (params.cfg_scale && cfgScaleInput) {
+            cfgScaleInput.value = params.cfg_scale;
+        }
+        
+        if (params.width && widthInput) {
+            widthInput.value = params.width;
+        }
+        
+        if (params.height && heightInput) {
+            heightInput.value = params.height;
+        }
+        
+        if (params.seed && seedInput) {
+            seedInput.value = params.seed;
+        }
+        
+        if (params.sampler_name && samplerNameInput) {
+            samplerNameInput.value = params.sampler_name;
+        }
+    }
+    
+    // Add event listener for the Fetch & Populate button
+    const fetchCivitaiInfoBtn = document.getElementById('fetch-civitai-info-btn');
+    if (fetchCivitaiInfoBtn) {
+        fetchCivitaiInfoBtn.addEventListener('click', fetchCivitaiImageInfo);
+    }
 
     // Gallery Functions
     async function loadGalleryImages() {
@@ -2546,4 +3101,38 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }
     }
+
+    // Add event listeners for navigation buttons
+    document.getElementById('nav-generator').addEventListener('click', () => {
+        showView('generator-view', 'nav-generator');
+    });
+    
+    document.getElementById('nav-queue').addEventListener('click', () => {
+        showView('queue-view', 'nav-queue');
+        loadQueueJobs(); // Refresh queue when the tab is clicked
+    });
+    
+    document.getElementById('nav-gallery').addEventListener('click', () => {
+        showView('gallery-view', 'nav-gallery');
+        loadGalleryImages(); // Refresh gallery when the tab is clicked
+    });
+    
+    document.getElementById('nav-models').addEventListener('click', () => {
+        showView('models-view', 'nav-models');
+        loadModels(); // Refresh models when the tab is clicked
+    });
+    
+    document.getElementById('nav-server-setup').addEventListener('click', () => {
+        showView('server-setup-view', 'nav-server-setup');
+        fetchAndDisplayServers(); // Refresh server list when the tab is clicked
+    });
+    
+    document.getElementById('nav-downloads').addEventListener('click', () => {
+        showView('downloads-view', 'nav-downloads');
+        // Initialize the downloads manager if it's not already initialized
+        if (window.downloadManager && !window.downloadManager.initialized) {
+            window.downloadManager.init();
+        }
+    });
+
 });
