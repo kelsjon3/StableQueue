@@ -334,102 +334,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function fetchAndPopulateServers() {
-        if (!serverAliasSelect) {
-            console.error('Server alias select dropdown not found.');
-            return;
-        }
 
-        serverAliasSelect.innerHTML = '<option value="">Loading servers...</option>'; // Clear existing options and show loading
 
-        try {
-            const response = await fetch('/api/v1/servers');
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const servers = await response.json();
-            allServersCache = servers; // Update cache
-            serverAliasSelect.innerHTML = ''; // Clear loading message
 
-            if (servers.length === 0) {
-                serverAliasSelect.innerHTML = '<option value="">No servers configured</option>';
-            } else {
-                servers.forEach(server => {
-                    const option = document.createElement('option');
-                    option.value = server.alias; // Assuming alias is unique and used as an identifier
-                    option.textContent = server.alias;
-                    serverAliasSelect.appendChild(option);
-                });
-            }
-        } catch (error) {
-            console.error('Error fetching servers for dropdown:', error);
-            allServersCache = []; // Clear cache on error
-            serverAliasSelect.innerHTML = '<option value="">Error loading servers</option>';
-            // Optionally, display a more user-friendly error message on the page
-        }
-    }
-
-    // Function to fetch and populate checkpoints for the Generator page
-    async function fetchAndPopulateCheckpoints() {
-        if (!checkpointSelect) {
-            console.error('Checkpoint select dropdown not found.');
-            return;
-        }
-
-        checkpointSelect.innerHTML = '<option value="">Loading checkpoints...</option>';
-
-        try {
-            const response = await fetch('/api/v1/checkpoints');
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const checkpointsData = await response.json(); // Expects an array of objects like [{filename: 'name.safetensors', ...}]
-
-            checkpointSelect.innerHTML = ''; // Clear loading message
-
-            if (checkpointsData.length === 0) {
-                checkpointSelect.innerHTML = '<option value="">No checkpoints found</option>';
-            } else {
-                checkpointsData.forEach(checkpointObj => {
-                    const option = document.createElement('option');
-                    if (checkpointObj && typeof checkpointObj.filename === 'string') {
-                        let fullPath = checkpointObj.filename;
-                        if (checkpointObj.relativePath && checkpointObj.relativePath !== '') {
-                            fullPath = `${checkpointObj.relativePath}/${checkpointObj.filename}`;
-                        }
-                        option.value = fullPath;  // Set value to full path
-                        option.textContent = fullPath;  // Display full path
-                        checkpointSelect.appendChild(option);
-                    } else {
-                        console.warn('Received invalid checkpoint object:', checkpointObj);
-                    }
-                });
-            }
-        } catch (error) {
-            console.error('Error fetching checkpoints:', error);
-            checkpointSelect.innerHTML = '<option value="">Error loading checkpoints</option>';
-        }
-    }
-
-    // Function to fetch LoRAs and cache them for dynamic row generation
-    async function fetchAndCacheLoras() {
-        try {
-            const response = await fetch('/api/v1/loras');
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            allLorasCache = await response.json(); // Expects an array of objects like [{filename: 'name.safetensors', relativePath: 'subfolder' ...}]
-            // console.log('LoRAs cached:', allLorasCache); // For debugging
-            if (allLorasCache.length === 0) {
-                // Optionally, disable the "Add LoRA" button or show a message if no LoRAs are available
-                console.info('No LoRAs found in library.');
-            }
-        } catch (error) {
-            console.error('Error fetching LoRAs for cache:', error);
-            allLorasCache = []; // Clear cache on error
-            // Optionally, display an error message or disable LoRA functionality
-        }
-    }
 
     // Function to fetch and display servers on the Server Setup page
     async function fetchAndDisplayServers() {
@@ -613,8 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Initial population of servers
-    fetchAndPopulateServers();
+
 
     // Navigation
     function showView(viewToShow, buttonToActivate) {
@@ -682,64 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // ... existing code ...
 
-    function createLoraRow() {
-        if (!loraRowTemplate) {
-            console.error('LoRA row template not found.');
-            return null;
-        }
 
-        const newRow = loraRowTemplate.cloneNode(true);
-        newRow.removeAttribute('id'); // Remove ID from clone to avoid duplicates
-        newRow.style.display = ''; // Make it visible (template is display:none). It has grid-container class.
-
-        const loraSelect = newRow.querySelector('.lora-select');
-        const removeLoraBtn = newRow.querySelector('.remove-lora-btn');
-
-        if (!loraSelect || !removeLoraBtn) {
-            console.error('Elements missing in LoRA row template clone.');
-            return null;
-        }
-
-        // Populate LoRA select dropdown
-        loraSelect.innerHTML = '<option value="">Select LoRA...</option>'; // Default option
-        if (allLorasCache.length > 0) {
-            allLorasCache.forEach(loraObj => {
-                const option = document.createElement('option');
-                if (loraObj && typeof loraObj.filename === 'string') {
-                    option.value = loraObj.filename;
-                    let displayText = loraObj.filename;
-                    if (loraObj.relativePath && loraObj.relativePath !== '') {
-                        displayText = `${loraObj.relativePath}/${loraObj.filename}`;
-                    }
-                    option.textContent = displayText;
-                    loraSelect.appendChild(option);
-                } else {
-                    console.warn('Received invalid LoRA object in cache:', loraObj);
-                }
-            });
-        } else {
-            loraSelect.innerHTML = '<option value="">No LoRAs available</option>';
-            loraSelect.disabled = true;
-        }
-
-        // Add event listener to the remove button for this specific row
-        removeLoraBtn.addEventListener('click', () => {
-            newRow.remove(); // Remove this LoRA row from the DOM
-        });
-
-        return newRow;
-    }
-
-    if (addLoraBtn && loraRowsContainer) {
-        addLoraBtn.addEventListener('click', () => {
-            const newLoraRow = createLoraRow();
-            if (newLoraRow) {
-                loraRowsContainer.appendChild(newLoraRow);
-            }
-        });
-    } else {
-        console.error('Add LoRA button or LoRA rows container not found.');
-    }
 
     // Initialize WebSocket client when page loads
     initializeJobClient();

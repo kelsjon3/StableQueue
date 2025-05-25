@@ -276,7 +276,13 @@ class DownloadQueueManager extends EventEmitter {
       }
       
       // Final path
-      const finalFilePath = path.join(download.targetDirectory, finalFilename);
+        // Use the same filename logic as the main download
+        let finalFilename = download.targetFilename;
+        if (!finalFilename) {
+          const urlPath = new URL(download.downloadUrl).pathname;
+          finalFilename = path.basename(urlPath);
+        }
+        const finalFilePath = path.join(download.targetDirectory, finalFilename);
       const metadataFilePath = path.join(
         download.targetDirectory, 
         path.basename(finalFilename, path.extname(finalFilename)) + METADATA_EXT
@@ -287,13 +293,21 @@ class DownloadQueueManager extends EventEmitter {
       
       // Create write stream
       const writer = fs.createWriteStream(finalFilePath);
-      
-      // Download with progress tracking
+// Download with progress tracking
+     const cancelSource = axios.CancelToken.source();
       const response = await axios({
         method: 'get',
         url: download.downloadUrl,
-        responseType: 'stream'
+       responseType: 'stream',
+       cancelToken: cancelSource.token
       });
+      
+     // Store cancel source for potential cancellation
+     download.cancelSource = cancelSource;
+      });
+      
+     // Store cancel source for potential cancellation
+     download.cancelSource = cancelSource;
       
       // Get content length for progress calculation
       const totalBytes = parseInt(response.headers['content-length'], 10);
@@ -363,21 +377,27 @@ class DownloadQueueManager extends EventEmitter {
       this.processQueue();
       
       return { success: true, filePath: finalFilePath };
-} catch (error) {
-     console.error(`[DownloadQueueManager] Error downloading ${download.modelName}:`, error);
-     
-    // Clean up partial download if it exists
-    try {
-      const finalFilePath = path.join(download.targetDirectory, download.targetFilename || 'temp');
-      if (await fsp.access(finalFilePath).then(() => true).catch(() => false)) {
-        await fsp.unlink(finalFilePath);
-        console.log(`[DownloadQueueManager] Cleaned up partial download: ${finalFilePath}`);
+    } catch (error) {
+      console.error(`[DownloadQueueManager] Error downloading ${download.modelName}:`, error);
+      
+      // Clean up partial download if it exists
+      try {
+        // Use the same filename logic as the main download
+        let finalFilename = download.targetFilename;
+        if (!finalFilename) {
+          const urlPath = new URL(download.downloadUrl).pathname;
+          finalFilename = path.basename(urlPath);
+        }
+        const finalFilePath = path.join(download.targetDirectory, finalFilename);
+        if (await fsp.access(finalFilePath).then(() => true).catch(() => false)) {
+          await fsp.unlink(finalFilePath);
+          console.log(`[DownloadQueueManager] Cleaned up partial download: ${finalFilePath}`);
+        }
+      } catch (cleanupError) {
+        console.error('[DownloadQueueManager] Error cleaning up partial download:', cleanupError);
       }
-    } catch (cleanupError) {
-      console.error('[DownloadQueueManager] Error cleaning up partial download:', cleanupError);
-    }
-    
-     // Update database with error
+      
+      // Update database with error
       this.db.prepare(
         `UPDATE downloads SET status = 'failed', error_message = ? WHERE id = ?`
       ).run(error.message, download.id);
@@ -419,16 +439,13 @@ class DownloadQueueManager extends EventEmitter {
         return { success: true, message: 'Download cancelled' };
       } 
 
-if (this.activeDownloads.has(downloadId)) {
-  const download = this.activeDownloads.get(downloadId);
-  if (download.cancelSource) {
-    download.cancelSource.cancel('Download cancelled by user');
-  }
-}
-
-  if (download.cancelSource) {
-    download.cancelSource.cancel('Download cancelled by user');
-  }
+      // Check if download is active
+      if (this.activeDownloads.has(downloadId)) {
+        const download = this.activeDownloads.get(downloadId);
+        if (download && download.cancelSource) {
+          download.cancelSource.cancel('Download cancelled by user');
+        }
+        
         // We'll just mark it as cancelled in the database and it will be cancelled on next server restart
         this.db.prepare(
           `UPDATE downloads SET status = 'cancelled' WHERE id = ?`
@@ -540,8 +557,6 @@ if (this.activeDownloads.has(downloadId)) {
       this.processQueue();
     }
   }
-    }
-  }
 
   // Close connections when shutting down
   async close() {
@@ -550,20 +565,6 @@ if (this.activeDownloads.has(downloadId)) {
       this.db = null;
     }
     this.initialized = false;
-  }
-}
-
-// Create and export a singleton instance
-const downloadQueueManager = new DownloadQueueManager();
-
-module.exports = downloadQueueManager;     this.initialized = false;
-  }
-}
-
-// Create and export a singleton instance
-const downloadQueueManager = new DownloadQueueManager();
-
-module.exports = downloadQueueManager; module.exports = downloadQueueManager;     this.initialized = false;
   }
 }
 

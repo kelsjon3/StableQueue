@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuration
-const BASE_URL = process.env.API_URL || 'http://localhost:3000';
+const BASE_URL = process.env.API_URL || 'http://192.168.73.124:8083';
 const API_KEY_FILE = path.join(__dirname, '..', 'data', 'test_api_key.json');
 
 // Colors for console output
@@ -135,7 +135,7 @@ async function submitTestJob(apiKey) {
       `${BASE_URL}/api/v2/generate`,
       {
         app_type: 'forge',
-        target_server_alias: 'local', // Adjust based on your server config
+        target_server_alias: 'Laptop', // Using an existing server from the configuration
         source_info: 'api_test_script',
         generation_params: {
           positive_prompt: 'A test prompt from the API test script',
@@ -172,6 +172,53 @@ async function submitTestJob(apiKey) {
 }
 
 /**
+ * Submits a test job with invalid API credentials
+ */
+async function submitTestJobWithInvalidCredentials() {
+  logStep(4, 'Testing authentication failure with invalid credentials');
+  
+  try {
+    const response = await axios.post(
+      `${BASE_URL}/api/v2/generate`,
+      {
+        app_type: 'forge',
+        target_server_alias: 'Laptop',
+        source_info: 'api_test_script',
+        generation_params: {
+          positive_prompt: 'A test prompt from the API test script',
+          negative_prompt: 'bad quality',
+          checkpoint_name: 'Realistic_Vision_V5.1.safetensors',
+          width: 512,
+          height: 512,
+          steps: 20,
+          cfg_scale: 7,
+          sampler_name: 'Euler',
+          restore_faces: false
+        }
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': 'invalid_key',
+          'X-API-Secret': 'invalid_secret'
+        }
+      }
+    );
+    
+    // We shouldn't get here - should fail with 401
+    logResult(false, 'Authentication failure test did not reject as expected', response.data);
+    return null;
+  } catch (error) {
+    if (error.response && error.response.status === 401) {
+      logResult(true, 'Authentication correctly failed with invalid credentials', error.response.data);
+    } else {
+      logResult(false, `Unexpected error during authentication test: ${error.message}`, error.response?.data);
+    }
+    return null;
+  }
+}
+
+/**
  * Main test function
  */
 async function runTests() {
@@ -195,6 +242,9 @@ async function runTests() {
   
   // Submit a test job
   await submitTestJob(apiKey);
+  
+  // Submit a test job with invalid credentials
+  await submitTestJobWithInvalidCredentials();
   
   console.log(`${colors.bright}${colors.magenta}=== Tests Complete ===${colors.reset}`);
 }

@@ -291,33 +291,310 @@ onUiLoaded(() => {
 });
 ```
 
-## 5. Implementation Phases
+## 5. Bulk Job Submission Feature
 
-### Phase 1: Database and API Preparation
-1. Update database schema with app_type and other fields
-2. Create API keys table and management system
-3. Implement authentication middleware
-4. Create/update API endpoints for job submission and status
+### 5.1 Overview
 
-### Phase 2: Extension Core Development
-1. Create basic extension structure
-2. Implement configuration panel
-3. Add parameter extraction from Forge UI
-4. Implement secure API communication
+Instead of implementing a true "Generate Forever" option, which would be impractical and could overload the queue, the extension will provide two context menu options in Forge:
 
-### Phase 3: UI Integration
-1. Add "Queue in MobileSD" button to Forge UI
-2. Create job status view in extension
-3. Implement queue management features
-4. Add error handling and user feedback
+1. **Send to MobileSD** - Sends the current generation settings as a single job
+2. **Send bulk job to MobileSD** - Sends multiple jobs with the same parameters but different seeds
 
-### Phase 4: Testing and Refinement
-1. Test extension with various parameter combinations
-2. Verify proper handling of different checkpoint types
-3. Test authentication and security features
-4. Ensure graceful error handling
+This approach gives users the benefit of queuing multiple jobs without keeping their browser open, while maintaining control over system resources.
 
-## 6. Testing Plan
+### 5.2 MobileSD Tab in Forge Settings
+
+A new "MobileSD" tab will be added to the Forge settings panel with the following options:
+
+```python
+with gr.Tab("MobileSD"):
+    with FormRow():
+        mobilesd_url = gr.Textbox(label="MobileSD Server URL", value="http://localhost:3000")
+        connection_status = gr.HTML("<div>Not connected</div>")
+        test_connection_btn = gr.Button("Test Connection")
+    
+    with FormRow():
+        api_key = gr.Textbox(label="API Key", value="")
+        api_secret = gr.Textbox(label="API Secret", value="", type="password")
+        create_key_btn = gr.Button("Create New Key")
+    
+    with FormRow():
+        bulk_job_quantity = gr.Slider(minimum=2, maximum=100, value=10, step=1, label="Bulk Job Quantity")
+        seed_variation = gr.Radio(choices=["Random", "Incremental"], value="Random", label="Seed Variation Method")
+        job_delay = gr.Slider(minimum=0, maximum=30, value=5, step=1, label="Delay Between Jobs (seconds)")
+```
+
+### 5.3 Context Menu Integration
+
+The extension will register two new options in the Forge context menu:
+
+```python
+def on_ui_settings():
+    section = ('mobilesd', "MobileSD Integration")
+    shared.opts.add_option("enable_mobilesd_context_menu", shared.OptionInfo(
+        True, "Add MobileSD options to generation context menu", section=section
+    ))
+
+# Register context menu items
+def context_menu_entries():
+    return [
+        {"label": "Send to MobileSD", "action": "mobilesdqueue_send_single", "tooltip": "Send current generation to MobileSD queue"},
+        {"label": "Send bulk job to MobileSD", "action": "mobilesdqueue_send_bulk", "tooltip": "Send multiple jobs with current settings to MobileSD queue"}
+    ]
+
+# Register JavaScript callbacks
+js_callbacks = [
+    """
+    function(params) {
+        // Send single job
+        fetch('/mobilesdqueue/send_single', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(params)
+        }).then(response => response.json())
+          .then(data => {
+              // Show notification
+              params.notification = { text: `Job sent to MobileSD: ${data.mobilesd_job_id}` };
+              return params;
+          });
+    }
+    """,
+    """
+    function(params) {
+        // Send bulk job
+        fetch('/mobilesdqueue/send_bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(params)
+        }).then(response => response.json())
+          .then(data => {
+              // Show notification
+              params.notification = { text: `Bulk job sent to MobileSD: ${data.count} jobs queued` };
+              return params;
+          });
+    }
+    """
+]
+```
+
+### 5.4 API Enhancements for Bulk Jobs
+
+#### 5.4.1 Bulk Job Submission Endpoint
+
+Create a new endpoint in the MobileSD API to handle bulk job submissions:
+
+```
+POST /api/v2/generate/bulk
+```
+
+Request body:
+```json
+{
+  "app_type": "forge",
+  "target_server_alias": "MyForgeServer",
+  "source_info": "forge_extension_bulk",
+  "bulk_quantity": 10,
+  "seed_variation": "random", // or "incremental"
+  "base_seed": -1, // -1 for random, or specific seed to start from
+  "job_delay": 5, // seconds between jobs
+  "generation_params": {
+    "positive_prompt": "a beautiful landscape",
+    "negative_prompt": "ugly, blurry",
+    "checkpoint_name": "Pony/cyberrealisticPony_v8.safetensors",
+    "width": 512,
+    "height": 512,
+    "steps": 20,
+    "cfg_scale": 7,
+    "sampler_name": "Euler",
+    "restore_faces": false
+  }
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "bulk_job_id": "bulk_2a7b8901",
+  "jobs": [
+    {"mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66", "queue_position": 1},
+    {"mobilesd_job_id": "99726d0e-82fd-5914-99c1-25f6273f7d77", "queue_position": 2},
+    // ... additional jobs
+  ],
+  "total_jobs": 10
+}
+```
+
+#### 5.4.2 Bulk Job Tracking
+
+Add a new field to the jobs table:
+```sql
+ALTER TABLE jobs ADD COLUMN bulk_job_id TEXT;
+```
+
+Add a new endpoint to track bulk job status:
+```
+GET /api/v2/generate/bulk/:bulkJobId
+```
+
+Response:
+```json
+{
+  "bulk_job_id": "bulk_2a7b8901",
+  "total_jobs": 10,
+  "completed_jobs": 3,
+  "processing_jobs": 1,
+  "pending_jobs": 6,
+  "failed_jobs": 0,
+  "progress_percentage": 35,
+  "jobs": [
+    {
+      "mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
+      "status": "completed",
+      "preview_url": "http://mobilesd-server:3000/api/v1/images/preview/88615c9d_00001.png"
+    },
+    // ... other jobs
+  ]
+}
+```
+
+#### 5.4.3 Bulk Job Cancellation
+
+Add an endpoint to cancel remaining jobs in a bulk submission:
+```
+POST /api/v2/generate/bulk/:bulkJobId/cancel
+```
+
+Response:
+```json
+{
+  "success": true,
+  "bulk_job_id": "bulk_2a7b8901",
+  "cancelled_jobs": 6,
+  "message": "Remaining jobs in bulk submission have been cancelled"
+}
+```
+
+### 5.5 Backend Implementation
+
+The extension will handle bulk job submission by:
+
+1. Capturing the current generation parameters from the Forge UI
+2. Creating multiple variations with different seeds
+3. Submitting the jobs as a batch with a shared bulk_job_id
+4. Tracking the progress of all jobs in the batch
+5. Providing a UI to monitor and potentially cancel remaining jobs
+
+```python
+def send_bulk_job(self, params):
+     bulk_quantity = shared.opts.data.get("mobilesd_bulk_quantity", 10)
+    # Validate bulk quantity limits
+    if bulk_quantity < 1 or bulk_quantity > 100:
+        return {"success": False, "message": "Bulk quantity must be between 1 and 100"}
+    
+     seed_variation = shared.opts.data.get("mobilesd_seed_variation", "random")
+     job_delay = shared.opts.data.get("mobilesd_job_delay", 5)
+    # Limit job delay to prevent abuse
+    job_delay = max(0, min(job_delay, 30))
+    base_seed = params.get("seed", -1)
+    
+    # Prepare bulk job request
+    bulk_request = {
+        "app_type": "forge",
+        "target_server_alias": params.get("server_alias", "default"),
+        "source_info": "forge_extension_bulk",
+        "bulk_quantity": bulk_quantity,
+        "seed_variation": seed_variation,
+        "base_seed": base_seed,
+        "job_delay": job_delay,
+        "generation_params": self.extract_parameters(params)
+    }
+    
+    # Send to MobileSD API
+    try:
+        response = requests.post(
+            f"{self.mobilesd_url}/api/v2/generate/bulk",
+            json=bulk_request,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": self.api_key,
+                "X-API-Secret": self.api_secret
+            }
+        )
+        
+        if response.status_code == 202:
+            data = response.json()
+            return {
+                "success": True,
+                "bulk_job_id": data["bulk_job_id"],
+                "total_jobs": data["total_jobs"],
+                "message": f"Successfully queued {data['total_jobs']} jobs in MobileSD"
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Failed to queue bulk job: {response.text}"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error connecting to MobileSD: {str(e)}"
+        }
+```
+
+### 5.6 UI Monitoring Component
+
+Add a monitoring panel to track bulk job progress:
+
+```python
+def create_bulk_monitor_ui():
+    with gr.Box():
+        gr.HTML("<h3>Bulk Job Monitor</h3>")
+        with gr.Row():
+            bulk_job_id = gr.Textbox(label="Bulk Job ID")
+            refresh_btn = gr.Button("Refresh Status")
+            cancel_btn = gr.Button("Cancel Remaining Jobs", variant="stop")
+        
+        progress_bar = gr.Slider(minimum=0, maximum=100, value=0, label="Progress", interactive=False)
+        status_html = gr.HTML("<div>No active bulk job</div>")
+        
+        thumbnail_gallery = gr.Gallery(label="Completed Images", show_label=True)
+        
+    refresh_btn.click(fn=refresh_bulk_status, inputs=[bulk_job_id], outputs=[progress_bar, status_html, thumbnail_gallery])
+    cancel_btn.click(fn=cancel_bulk_job, inputs=[bulk_job_id], outputs=[status_html])
+    
+    return bulk_job_id, progress_bar, status_html, thumbnail_gallery
+```
+
+## 6. Implementation Plan and Timeline
+
+1. **Database and API Enhancements** (1-2 days)
+   - Add bulk_job_id field to jobs table
+   - Create bulk job submission endpoint
+   - Implement bulk job tracking and cancellation APIs
+
+2. **Forge Extension UI Components** (2-3 days)
+   - Create MobileSD settings tab
+   - Implement context menu options
+   - Build bulk job monitoring panel
+
+3. **Backend Implementation** (2-3 days)
+   - Implement bulk job parameter handling
+   - Add seed variation logic
+   - Create bulk job submission and tracking logic
+
+4. **Testing and Refinement** (1-2 days)
+   - Test different quantity settings
+   - Verify seed variation works correctly
+   - Ensure progress tracking is accurate
+   - Test cancellation functionality
+
+5. **Documentation and Release** (1 day)
+   - Update user documentation
+   - Create usage examples
+   - Package for distribution
+
+## 7. Testing Plan
 
 1. **Unit Tests**
    - API authentication validation
@@ -334,14 +611,20 @@ onUiLoaded(() => {
    - Server disconnection handling
    - Rate limiting and error responses
 
-## 7. Security Considerations
+## 8. Security Considerations
 
-1. **API Authentication**
-   - Use secure random generation for API keys and secrets
-   - Implement proper validation and error handling
-   - Store secrets securely (hashed, not plaintext)
+ 1. **API Authentication**
+    - Use secure random generation for API keys and secrets
+    - Implement proper validation and error handling
+    - Store secrets securely (hashed, not plaintext)
 
-2. **Input Validation**
+2. **Bulk Job Security**
+   - Implement per-user limits on bulk job quantities
+   - Add rate limiting for bulk job submissions
+   - Validate job_delay parameters to prevent system abuse
+   - Monitor and alert on unusual bulk job patterns
+
+3. **Input Validation**
    - Sanitize all user inputs from the extension
    - Validate parameters before submission
    - Implement proper error handling for invalid inputs

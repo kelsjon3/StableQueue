@@ -1,27 +1,47 @@
 #!/bin/bash
 
-# Run API Test Script
-# This script runs the API test script to verify that the API endpoints are working
+# Set the target API URL to the Unraid server
+export API_URL="${API_URL:-http://localhost:8083}"
+echo "Testing API rate limiting against $API_URL"
 
-# Change to the project root directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
+# Create a test API key via the API endpoint
+echo "Creating test API key via API..."
+RESPONSE=$(curl -s -X POST \
+   -H "Content-Type: application/json" \
+   -d '{"name":"Rate Limit Test Key", "permissions":{"description":"Test key for rate limiting", "allowed_endpoints":["*"]}, "rate_limit_tier":"extended"}' \
+  "${API_URL}/api/v1/api-keys" || { echo "Failed to connect to API"; exit 1; })
 
-# Check if node is installed
-if ! command -v node &> /dev/null; then
-    echo "Node.js is not installed. Please install Node.js first."
+# Extract key and secret from response
+KEY=$(echo $RESPONSE | jq -r '.key // empty')
+SECRET=$(echo $RESPONSE | jq -r '.secret // empty')
+
+if [ -z "$KEY" ] || [ -z "$SECRET" ]; then
+    echo "Failed to create API key! Response:"
+    echo "$RESPONSE"
     exit 1
 fi
 
-# Check if axios is installed
-if ! node -e "require.resolve('axios')" &> /dev/null; then
-    echo "Installing axios..."
-    npm install axios
-fi
+echo "API key created successfully:"
+echo "Key: $KEY"
+echo "Secret: $SECRET"
 
-# Run the test script
-echo "Running API test script..."
-node scripts/test_api.js
+# Save the key and secret to a file for the test script
+mkdir -p data
+cat > data/test_api_key.json << EOF
+{
+  "name": "Rate Limit Test Key",
+  "key": "$KEY",
+  "secret": "$SECRET"
+}
+EOF
 
-# Exit with the exit code of the test script
-exit $? 
+echo "Saved key to data/test_api_key.json"
+
+# Wait a moment for the key to be properly registered
+sleep 2
+
+# Run the rate limiting test
+echo "Running rate limit tests against $API_URL..."
+node scripts/test_rate_limits.js
+
+echo "Test completed!" 
