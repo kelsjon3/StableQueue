@@ -10,19 +10,14 @@ const { runMigration } = require('./utils/dbMigration'); // Import the database 
 const { globalRateLimiter } = require('./utils/apiRateLimiter'); // Import global rate limiter
 const serversRouter = require('./routes/servers');
 const resourcesRouter = require('./routes/resources');
-const civitaiRouter = require('./routes/civitai');
 const generationRouter = require('./routes/generation');
 const v2GenerationRouter = require('./routes/v2Generation'); // Import the new v2 generation router
 const apiKeysRouter = require('./routes/apiKeys'); // Import the API keys router
 const galleryRouter = require('./routes/gallery');
-const modelsRouter = require('./routes/models');
-const downloadsRouter = require('./routes/downloads');
 const gradioJobDispatcher = require('./services/gradioJobDispatcher');
 const forgeJobMonitor = require('./services/forgeJobMonitor');
 const dispatcher = require('./services/dispatcher');
-const modelDB = require('./utils/modelDatabase');
 const jobStatusManager = require('./services/jobStatusManager');
-const downloadQueueManager = require('./services/downloadQueueManager');
 
 // Load environment variables from .env file if it exists
 try {
@@ -65,11 +60,8 @@ app.use('/api', globalRateLimiter);
 // API routes
 app.use('/api/v1/servers', serversRouter);
 app.use('/api/v1', resourcesRouter); // Mounts /loras, /checkpoints
-app.use('/api/v1', civitaiRouter);
 app.use('/api/v1', generationRouter); // Mounts /generate, /queue/jobs/:jobId/status
 app.use('/api/v1/gallery', galleryRouter); // Mount the new gallery routes
-app.use('/api/v1', modelsRouter); // Mount the new models routes
-app.use('/api/v1/downloads', downloadsRouter); // Mount the new downloads routes
 app.use('/api/v1/api-keys', apiKeysRouter); // Register API keys router
 app.use('/api/v2', v2GenerationRouter); // Register v2 generation router
 
@@ -88,15 +80,6 @@ async function startServices() {
   console.log('Starting MobileSD services...');
   
   try {
-    // Initialize the model database
-    console.log('Initializing model database...');
-    await modelDB.populateModelCache();
-    
-    // Initialize the download queue manager
-    console.log('Initializing download queue manager...');
-    await downloadQueueManager.initialize();
-    console.log('Download queue manager initialized.');
-    
     // Start job dispatcher
     console.log('Starting job queue dispatcher...');
     gradioJobDispatcher.startDispatcher();
@@ -124,16 +107,6 @@ const shutdown = async (signal, value) => {
     if (typeof stopDispatcher === 'function') {
         console.log('[App] Stopping Gradio Job Dispatcher...');
         stopDispatcher();
-    }
-
-    // Close the download queue manager
-    if (downloadQueueManager && typeof downloadQueueManager.close === 'function') {
-        try {
-            await downloadQueueManager.close();
-            console.log('[App] Download queue manager closed.');
-        } catch (error) {
-            console.error('[App] Error closing download queue manager:', error);
-        }
     }
 
     if (readJobQueue && typeof readJobQueue.closeDB === 'function') {
