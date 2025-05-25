@@ -1,9 +1,9 @@
 version: '3.8'
 services:
-  mobilesd:
-    image: mobilesd-app:latest
+  stablequeue:
+    image: stablequeue-app:latest
     build: .
-    container_name: mobilesd
+    container_name: stablequeue
     ports:
       - "8083:3000"
     volumes:
