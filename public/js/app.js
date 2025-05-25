@@ -108,15 +108,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // If this is our current job, update the progress UI
             if (currentJobId && job.mobilesd_job_id === currentJobId) {
                 currentJob = job;
-                updateProgressUI(job);
+                logJobStatus(job);
                 
                 // If the job is complete, log it
-                if (job.status === 'completed' && job.result_details) {
-                    // Log that the job completed
+                if (job.status === 'completed') {
                     console.log('Job completed:', job.mobilesd_job_id);
-                    console.log('Result details available:', !!job.result_details);
-                    console.log('Saved filenames:', job.result_details?.saved_filenames);
-                    console.log('Legacy images field:', job.result_details?.images);
                 }
             }
         });
