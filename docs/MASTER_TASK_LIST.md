@@ -1,6 +1,6 @@
-# MobileSD Master Task List
+# StableQueue Master Task List
 
-This document serves as the definitive source for determining what to work on next in the MobileSD project. Tasks are organized by priority and component.
+This document serves as the definitive source for determining what to work on next in the StableQueue project. Tasks are organized by priority and component.
 
 ## High Priority Tasks
 
@@ -18,33 +18,33 @@ This document serves as the definitive source for determining what to work on ne
 - [x] Add endpoints for API key management (create, list, delete, update)
 - [x] Implement logging for API key usage and access attempts
 - [x] Add rate limiting based on API key
-- [ ] Create UI for managing API keys
+- [x] Create UI for managing API keys
 
 ### API Standardization (for Extension Support)
 - [x] Implement standardized job submission endpoint (`/api/v2/generate`)
-- [ ] Update job status endpoint to include additional fields for extensions
-- [ ] Enhance queue management endpoints with filtering by app_type
-- [ ] Create detailed API documentation specifically for extension developers
-- [ ] Implement proper error reporting from API to extension
-- [ ] Add automated tests for API endpoints
+- [x] Update job status endpoint to include additional fields for extensions
+- [x] Enhance queue management endpoints with filtering by app_type
+- [x] Create detailed API documentation specifically for extension developers
+- [x] Implement proper error reporting from API to extension
+- [x] Add automated tests for API endpoints
 
 ### Testing the New APIs
-- [ ] Test API key creation and management
-- [ ] Test API authentication with various scenarios (valid/invalid keys)
-- [ ] Test job submission via new v2 endpoint
-- [ ] Test handling of app_type and source_info fields
-- [ ] Create Postman collection for API testing
+- [x] Test API key creation and management
+- [x] Test API authentication with various scenarios (valid/invalid keys)
+- [x] Test job submission via new v2 endpoint
+- [x] Test handling of app_type and source_info fields
+- [x] Create Postman collection for API testing
 
 ### Forge Extension Development
 - [ ] Create basic extension structure (Python backend, JS frontend)
-- [ ] Add "Send to MobileSD" option to right-click context menu in Forge UI
-- [ ] Add "Send bulk job to MobileSD" option to right-click context menu in Forge UI
-- [ ] Create a "MobileSD" tab in Forge settings for configuration options
-- [ ] Implement bulk job quantity setting in MobileSD tab
+- [ ] Add "Send to StableQueue" option to right-click context menu in Forge UI
+- [ ] Add "Send bulk job to StableQueue" option to right-click context menu in Forge UI
+- [ ] Create a "StableQueue" tab in Forge settings for configuration options
+- [ ] Implement bulk job quantity setting in StableQueue tab
 - [ ] Implement parameter capture from Forge UI
 - [ ] Add seed variation for bulk jobs
 - [ ] Implement bulk job tracking with shared bulk_job_id
-- [ ] Establish secure communication with MobileSD API
+- [ ] Establish secure communication with StableQueue API
 - [ ] Add configuration panel for server URL and API credentials
 - [ ] Implement job status monitoring within extension
 - [ ] Add progress indicator for bulk jobs
@@ -106,7 +106,7 @@ This document serves as the definitive source for determining what to work on ne
 
 ## Completed Tasks
 
-- [x] Core MobileSD Application & Docker Setup
+- [x] Core StableQueue Application & Docker Setup
 - [x] Dynamic Server Configuration Management
 - [x] Job Queue System with SQLite persistence
 - [x] Job Dispatcher Service

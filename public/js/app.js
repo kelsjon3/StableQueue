@@ -35,6 +35,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const deleteJobBtn = document.getElementById('delete-job-btn');
     const viewJobResultsBtn = document.getElementById('view-job-results-btn');
     const jobDetailsCloseBtn = jobDetailsModal ? jobDetailsModal.querySelector('.close-modal') : null;
+    
+    // API Keys view elements (we'll use these to trigger data loading)
+    const apiKeysView = document.getElementById('api-keys-view');
+
+    // Navigation Elements
+    const navQueue = document.getElementById('nav-queue');
+    const navGallery = document.getElementById('nav-gallery');
+    const navServerSetup = document.getElementById('nav-server-setup');
+    const navApiKeys = document.getElementById('nav-api-keys');
+    
+    // View Elements
+    const queueView = document.getElementById('queue-view');
+    const galleryView = document.getElementById('gallery-view');
+    const serverSetupView = document.getElementById('server-setup-view');
 
     let allServersCache = []; // Cache for server data to assist with editing
     let currentJobId = null; // Track the current job ID for the progress display
@@ -455,70 +469,50 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Navigation
+    // Main navigation function
     function showView(viewToShow, buttonToActivate) {
         // Hide all views
-        const views = ['server-setup-view', 'gallery-view', 'queue-view'];
-        views.forEach(view => {
-            const element = document.getElementById(view);
-            if (element) {
-                element.style.display = 'none';
+        queueView.style.display = 'none';
+        galleryView.style.display = 'none';
+        serverSetupView.style.display = 'none';
+        apiKeysView.style.display = 'none';
+        
+        // Remove active class from all buttons
+        navQueue.classList.remove('active');
+        navGallery.classList.remove('active');
+        navServerSetup.classList.remove('active');
+        navApiKeys.classList.remove('active');
+        
+        // Show selected view and activate the button
+        viewToShow.style.display = 'block';
+        buttonToActivate.classList.add('active');
+        
+        // Load view-specific data
+        if (viewToShow === queueView) {
+            // Load queue data if we don't have a websocket connection
+            if (!jobClient || !jobClient.socket || !jobClient.socket.connected) {
+                fetchAndDisplayJobs();
             }
-        });
-        
-        // Show the requested view
-        const viewElement = document.getElementById(viewToShow);
-        if (viewElement) {
-            viewElement.style.display = 'block';
-        }
-        
-        // Update navigation button states
-        const navButtons = document.querySelectorAll('.nav-button');
-        navButtons.forEach(button => {
-            button.classList.remove('active');
-        });
-        
-        const activeButton = document.getElementById(buttonToActivate);
-        if (activeButton) {
-            activeButton.classList.add('active');
+        } else if (viewToShow === galleryView) {
+            fetchAndDisplayImages();
+        } else if (viewToShow === serverSetupView) {
+            fetchAndDisplayServers();
+        } else if (viewToShow === apiKeysView) {
+            // Trigger API key loading when the view is shown
+            if (window.apiKeyManagerUI) {
+                window.apiKeyManagerUI.fetchAndDisplayApiKeys();
+            }
         }
     }
 
-    // Define the navigation buttons
-    const navServerSetupBtn = document.getElementById('nav-server-setup');
-    const navGalleryBtn = document.getElementById('nav-gallery');
-    const navQueueBtn = document.getElementById('nav-queue');
+    // Set up navigation event listeners
+    navQueue.addEventListener('click', () => showView(queueView, navQueue));
+    navGallery.addEventListener('click', () => showView(galleryView, navGallery));
+    navServerSetup.addEventListener('click', () => showView(serverSetupView, navServerSetup));
+    navApiKeys.addEventListener('click', () => showView(apiKeysView, navApiKeys));
 
-    // Define the view sections
-    const serverSetupView = document.getElementById('server-setup-view');
-    const galleryView = document.getElementById('gallery-view');
-    const queueView = document.getElementById('queue-view');
-
-    if (navServerSetupBtn && navGalleryBtn && navQueueBtn && 
-        serverSetupView && galleryView && queueView) {
-        
-        navServerSetupBtn.addEventListener('click', () => {
-            showView('server-setup-view', 'nav-server-setup');
-            fetchAndDisplayServers(); // Fetch and display servers when switching to this view
-        });
-
-        navGalleryBtn.addEventListener('click', () => {
-            showView('gallery-view', 'nav-gallery');
-            loadGalleryImages(); // Load images when navigating to gallery
-        });
-
-        navQueueBtn.addEventListener('click', () => {
-            showView('queue-view', 'nav-queue');
-            loadQueueJobs(); // Load jobs when navigating to queue
-        });
-
-        // Initially show the queue view as the default
-        showView('queue-view', 'nav-queue');
-        loadQueueJobs(); // Load jobs for initial view
-    } else {
-        console.error('One or more navigation elements or views not found.');
-    }
-    
-    // Initialize WebSocket client when page loads
+    // Initialize the app
     initializeJobClient();
+    // Start on queue view by default
+    showView(queueView, navQueue);
 });

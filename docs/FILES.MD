@@ -1,11 +1,11 @@
-# MobileSD Project File Structure
+# StableQueue Project File Structure
 
-This document outlines the main files and directories in the MobileSD project.
+This document outlines the main files and directories in the StableQueue project.
 
 ## Root Directory
 
 *   `.git/`: Git repository data.
-*   `data/`: Persistent data directory (mapped volume in Docker). Contains `servers.json` and the SQLite database `mobilesd_jobs.sqlite` for job queue management.
+*   `data/`: Persistent data directory (mapped volume in Docker). Contains `servers.json` and the SQLite database `stablequeue_jobs.sqlite` for job queue management.
 *   `docs/`: Project documentation (including this file).
     *   `Pinokio_Forge_API Guide.txt`: Reference documentation for Forge API integration.
     *   `Stable Diffusion Image Save API_.txt`: Documentation on image saving functionality.
@@ -42,9 +42,9 @@ This document outlines the main files and directories in the MobileSD project.
     *   `clearQueue.js`: Utility script to clear all pending and processing jobs in the queue.
     *   `resetApp.js`: Emergency reset script to completely clear application state and restart cleanly.
 *   `app.js`: Main Node.js/Express application entry point. Sets up server, middleware, routes, and starts services.
-*   `deploy-mobilesd-to-unraid.sh`: Script to build, transfer, and deploy the Docker image to the Unraid server. Includes functionality to clear the job queue.
+*   `deploy-stablequeue-to-unraid.sh`: Script to build, transfer, and deploy the Docker image to the Unraid server. Includes functionality to clear the job queue.
 *   `docker-compose.yml`: Docker Compose configuration for local development/build.
-*   `Dockerfile`: Instructions for building the MobileSD application Docker image.
+*   `Dockerfile`: Instructions for building the StableQueue application Docker image.
 *   `.gitignore`: Specifies intentionally untracked files that Git should ignore.
 *   `package.json`: Defines project metadata and dependencies.
 *   `package-lock.json`: Records exact versions of dependencies.
@@ -52,7 +52,7 @@ This document outlines the main files and directories in the MobileSD project.
 
 ## Architecture Overview
 
-MobileSD uses a single-container Docker approach with Node.js/Express serving both the API and static frontend assets. The core functionality includes:
+StableQueue uses a single-container Docker approach with Node.js/Express serving both the API and static frontend assets. The core functionality includes:
 
 1. **Dynamic Server Configuration**: Manage multiple Forge server connections through a user-friendly interface.
 2. **Job Queue System**: SQLite-based persistent job queue that operates independently of the browser.
@@ -77,4 +77,4 @@ For checkpoint handling, the system:
 2. Maintains a model database for efficient model lookup across different path formats
 3. Uses both the Gradio template's checkpoint field (index 17) and override_settings in the payload
 
-This architecture provides robust cross-platform compatibility and allows MobileSD to queue and process image generations even if the user closes their browser.
+This architecture provides robust cross-platform compatibility and allows StableQueue to queue and process image generations even if the user closes their browser.

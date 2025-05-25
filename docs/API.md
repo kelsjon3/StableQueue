@@ -1,6 +1,6 @@
-# MobileSD API Documentation
+# StableQueue API Documentation
 
-This document provides details on the API endpoints available in the MobileSD application.
+This document provides details on the API endpoints available in the StableQueue application.
 
 ## Job Generation API
 
@@ -35,7 +35,7 @@ Adds a new job to the queue for image generation.
 **Response:**
 ```json
 {
-  "mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66"
+  "stablequeue_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66"
 }
 ```
 
@@ -48,7 +48,7 @@ Gets the status of a specific job.
 **Response:**
 ```json
 {
-  "mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
+  "stablequeue_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
   "status": "completed",
   "creation_timestamp": "2025-05-14T02:34:48.985Z",
   "last_updated_timestamp": "2025-05-14T02:40:48.706Z",
@@ -77,7 +77,7 @@ Gets the status of a specific job.
   },
   "result_details": {
     "images": ["88615c9d_1747190448393_00028-1806652750.png"],
-    "info": "Job completed and images downloaded by MobileSD backend.",
+    "info": "Job completed and images downloaded by StableQueue backend.",
     "generation_info": {
       "prompt": "a pretty girl",
       "all_prompts": ["a pretty girl"],
@@ -107,7 +107,7 @@ Gets all jobs in the queue with optional filtering and pagination.
   "total": 25,
   "jobs": [
     {
-      "mobilesd_job_id": "067c2def-0b3b-4ef1-8eb8-8ce087f4a3cf",
+      "stablequeue_job_id": "067c2def-0b3b-4ef1-8eb8-8ce087f4a3cf",
       "status": "pending",
       "creation_timestamp": "2025-05-14T03:50:01.109Z",
       "last_updated_timestamp": "2025-05-14T03:50:01.109Z",
@@ -140,7 +140,7 @@ Cancels a job in the queue.
 {
   "message": "Job cancelled successfully.",
   "job": {
-    "mobilesd_job_id": "3e5128a1-456a-49d8-82f1-7c7351e8600a",
+    "stablequeue_job_id": "3e5128a1-456a-49d8-82f1-7c7351e8600a",
     "status": "cancelled",
     "creation_timestamp": "2025-05-14T03:53:01.109Z",
     "last_updated_timestamp": "2025-05-14T03:53:13.841Z",

@@ -9,8 +9,8 @@ NC='\033[0m' # No Color
 # --- Configuration - Adjust these to your Unraid setup ---
 UNRAID_HOST="${UNRAID_HOST:-"192.168.73.124"}" # Default from Billado, overridden by .env
 UNRAID_USER="${UNRAID_USER:-"root"}"       # Default from Billado, overridden by .env
-APP_NAME="mobilesd"
-IMAGE_NAME="mobilesd-app" # Should match 'image:' in docker-compose.yml
+APP_NAME="stablequeue"
+IMAGE_NAME="stablequeue-app" # Should match 'image:' in docker-compose.yml
 IMAGE_TAG="latest"
 
 # Base directory for the app on Unraid (e.g., under appdata)
@@ -19,18 +19,18 @@ UNRAID_APP_DIR="${UNRAID_APP_BASE_DIR}/${APP_NAME}"
 
 # Paths on Unraid for persistent data - these will be used in the docker-compose on Unraid
 # Ensure these parent directories exist on Unraid or are created by Unraid's appdata system
-UNRAID_CONFIG_DATA_PATH="${UNRAID_APP_DIR}/data" # For MobileSD's own config like servers.json
+UNRAID_CONFIG_DATA_PATH="${UNRAID_APP_DIR}/data" # For StableQueue's own config like servers.json
 
 
 # !!! CRITICAL: REVIEW AND SET THESE PATHS MANUALLY AFTER THIS EDIT !!!
 # Point these to your actual master model library and desired saves location on Unraid.
 # Assumes a base data path is set. Using Forge-like structure.
 UNRAID_DATA_PATH="/mnt/user/Stable_Diffusion_Data" # Your master data location
-UNRAID_SAVES_PATH="${UNRAID_DATA_PATH}/outputs/MobileSD"       # Subfolder within outputs for clarity
+UNRAID_SAVES_PATH="${UNRAID_DATA_PATH}/outputs/StableQueue"       # Subfolder within outputs for clarity
 UNRAID_LORAS_PATH="${UNRAID_DATA_PATH}/models/Lora"           # Path to master LoRAs
 UNRAID_CHECKPOINTS_PATH="${UNRAID_DATA_PATH}/models/Stable-diffusion" # Path to master Checkpoints
 
-UNRAID_HOST_PORT="8083" # The port you want to access MobileSD on Unraid
+UNRAID_HOST_PORT="8083" # The port you want to access StableQueue on Unraid
 # --- End Configuration ---
 
 set -e # Exit immediately if a command exits with a non-zero status.
@@ -50,13 +50,13 @@ fi
 
 # Function to clear the job queue on the Unraid server
 clear_job_queue() {
-    echo -e "${YELLOW}Clearing MobileSD job queue on Unraid server...${NC}"
+    echo -e "${YELLOW}Clearing StableQueue job queue on Unraid server...${NC}"
     
     # Command to execute on the Unraid server
     ssh "${UNRAID_USER}@${UNRAID_HOST}" "bash -s" << 'EOF_CLEAR_QUEUE'
     
     # Path to the sqlite database
-    DB_PATH="/mnt/user/appdata/mobilesd/data/mobilesd_jobs.sqlite"
+    DB_PATH="/mnt/user/appdata/stablequeue/data/stablequeue_jobs.sqlite"
     
     if [ ! -f "$DB_PATH" ]; then
         echo "Database file not found at $DB_PATH. No jobs to clear."
@@ -90,7 +90,7 @@ EOF_CLEAR_QUEUE
 echo -e "${GREEN}Starting deployment of ${APP_NAME} to Unraid server: ${UNRAID_HOST}...${NC}"
 
 echo -e "${YELLOW}Step 1: Building Docker image locally (${IMAGE_NAME}:${IMAGE_TAG})...${NC}"
-docker-compose build mobilesd # 'mobilesd' is the service name in docker-compose.yml
+docker-compose build stablequeue # 'stablequeue' is the service name in docker-compose.yml
 if [ $? -ne 0 ]; then echo -e "${RED}Docker build failed! Aborting.${NC}"; exit 1; fi
 
 echo -e "${YELLOW}Step 2: Saving Docker image to a .tar file...${NC}"

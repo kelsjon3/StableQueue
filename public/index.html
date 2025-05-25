@@ -3,20 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MobileSD Interface</title>
+    <title>StableQueue Interface</title>
     <link rel="stylesheet" href="css/style.css">
     <!-- Socket.io client library -->
     <script src="/socket.io/socket.io.js"></script>
-    <!-- MobileSD Job Status Client -->
+    <!-- StableQueue Job Status Client -->
     <script src="js/jobStatusClient.js"></script>
 </head>
 <body>
     <header>
-        <h1>MobileSD</h1>
+        <h1>StableQueue</h1>
         <nav>
             <button id="nav-queue" class="nav-button active">Queue</button>
             <button id="nav-gallery" class="nav-button">Gallery</button>
             <button id="nav-server-setup" class="nav-button">Server Setup</button>
+            <button id="nav-api-keys" class="nav-button">API Keys</button>
         </nav>
     </header>
 
@@ -148,12 +149,117 @@
              </div>
         </section>
 
+        <section id="api-keys-view" style="display: none;">
+            <h2>API Key Management</h2>
+            <div id="api-keys-list-container" class="card">
+                <h3>Existing API Keys</h3>
+                <div class="api-keys-controls">
+                    <button id="refresh-keys-btn" class="secondary-button">Refresh List</button>
+                    <button id="create-key-btn" class="primary-button">Create New Key</button>
+                </div>
+                <div id="api-keys-list">
+                    <table id="api-keys-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Description</th>
+                                <th>Tier</th>
+                                <th>Created</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="api-keys-rows">
+                            <!-- API key rows will be inserted here dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+                <div id="api-keys-loading">Loading API keys...</div>
+                <div id="api-keys-empty" style="display: none;">No API keys found.</div>
+            </div>
+            
+            <div id="api-key-form-container" class="card" style="display: none;">
+                <h3 id="api-key-form-title">Create New API Key</h3>
+                <form id="api-key-form">
+                    <input type="hidden" id="edit-key-id" value="">
+                    <div class="form-group">
+                        <label for="api-key-name">Name:</label>
+                        <input type="text" id="api-key-name" required>
+                        <small>A name to identify this API key (e.g., "Forge Extension")</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="api-key-description">Description:</label>
+                        <textarea id="api-key-description" rows="2"></textarea>
+                        <small>Optional description of what this key is used for</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="api-key-tier">Tier:</label>
+                        <select id="api-key-tier">
+                            <option value="standard">Standard (60 req/min)</option>
+                            <option value="premium">Premium (300 req/min)</option>
+                        </select>
+                        <small>Rate limit tier for this API key</small>
+                    </div>
+                    <div class="form-group" id="api-key-active-group">
+                        <label>
+                            <input type="checkbox" id="api-key-active" checked>
+                            Active
+                        </label>
+                        <small>Inactive keys cannot be used to authenticate</small>
+                    </div>
+                    <div class="form-buttons">
+                        <button type="submit" id="save-api-key-btn" class="primary-button">Create API Key</button>
+                        <button type="button" id="cancel-api-key-btn" class="secondary-button">Cancel</button>
+                    </div>
+                </form>
+            </div>
+            
+            <div id="api-key-result-container" class="card" style="display: none;">
+                <h3>API Key Created</h3>
+                <p class="alert alert-warning">This is the only time the full API key will be displayed. Make sure to copy it now!</p>
+                
+                <div class="api-key-result">
+                    <div class="form-group">
+                        <label for="new-api-key">API Key:</label>
+                        <div class="input-with-button">
+                            <input type="text" id="new-api-key" readonly>
+                            <button type="button" id="copy-api-key-btn" class="secondary-button">Copy</button>
+                        </div>
+                    </div>
+                    <div class="api-key-details">
+                        <p><strong>ID:</strong> <span id="new-api-key-id"></span></p>
+                        <p><strong>Name:</strong> <span id="new-api-key-name"></span></p>
+                        <p><strong>Tier:</strong> <span id="new-api-key-tier"></span></p>
+                        <p><strong>Created:</strong> <span id="new-api-key-created"></span></p>
+                    </div>
+                </div>
+                <div class="form-buttons">
+                    <button id="done-api-key-btn" class="primary-button">Done</button>
+                </div>
+            </div>
+            
+            <div id="api-key-details-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <span class="close-modal">&times;</span>
+                    <div class="modal-body">
+                        <h3>API Key Details</h3>
+                        <div id="api-key-details-content"></div>
+                        <div id="api-key-actions">
+                            <button id="edit-key-btn" class="secondary-button">Edit Key</button>
+                            <button id="delete-key-btn" class="danger-button">Delete Key</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
     </main>
 
     <footer>
-        <p>MobileSD Interface</p>
+        <p>StableQueue Interface</p>
     </footer>
 
     <script src="js/app.js"></script>
+    <script src="js/apiKeyManager.js"></script>
 </body>
 </html>

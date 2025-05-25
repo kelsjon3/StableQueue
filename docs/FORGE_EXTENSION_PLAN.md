@@ -1,6 +1,6 @@
 # Forge Extension Implementation Plan
 
-This document outlines the detailed plan for implementing a Forge extension that will send jobs to the MobileSD queue system.
+This document outlines the detailed plan for implementing a Forge extension that will send jobs to the StableQueue queue system.
 
 ## 1. Database Preparation
 
@@ -9,7 +9,7 @@ This document outlines the detailed plan for implementing a Forge extension that
 Current database schema:
 ```sql
 CREATE TABLE IF NOT EXISTS jobs (
-    mobilesd_job_id TEXT PRIMARY KEY,
+    stablequeue_job_id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
     creation_timestamp TEXT NOT NULL,
     last_updated_timestamp TEXT NOT NULL,
@@ -124,7 +124,7 @@ Response:
 ```json
 {
   "success": true,
-  "mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
+  "stablequeue_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
   "queue_position": 1,
   "estimated_start_time": "2024-07-01T15:32:45.000Z"
 }
@@ -140,7 +140,7 @@ GET /api/v1/queue/jobs/:jobId/status
 Enhanced response to include more details for the extension:
 ```json
 {
-  "mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
+  "stablequeue_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
   "app_type": "forge",
   "status": "processing",
   "progress": 45,
@@ -160,8 +160,8 @@ Enhanced response to include more details for the extension:
   },
   "images": [
     {
-      "preview_url": "http://mobilesd-server:3000/api/v1/images/preview/88615c9d_00001.png",
-      "download_url": "http://mobilesd-server:3000/api/v1/images/download/88615c9d_00001.png",
+      "preview_url": "http://stablequeue-server:3000/api/v1/images/preview/88615c9d_00001.png",
+      "download_url": "http://stablequeue-server:3000/api/v1/images/download/88615c9d_00001.png",
       "width": 512,
       "height": 512
     }
@@ -183,11 +183,11 @@ DELETE /api/v1/queue/jobs/:jobId
 ### 4.1 Directory Structure
 
 ```
-mobilesdqueue/
+stablequeue/
 ├── scripts/
-│   └── mobilesdqueue.py  (Main Python code)
+│   └── stablequeue.py  (Main Python code)
 ├── javascript/
-│   └── mobilesdqueue.js  (Frontend integration)
+│   └── stablequeue.js  (Frontend integration)
 ├── style.css             (Custom styling)
 └── install.py            (Installation script)
 ```
@@ -195,7 +195,7 @@ mobilesdqueue/
 ### 4.2 Backend Python Implementation
 
 Key components:
-1. API client to communicate with MobileSD
+1. API client to communicate with StableQueue
 2. Parameter extraction from Forge UI
 3. Configuration management
 4. UI component registration
@@ -209,38 +209,38 @@ import requests
 from modules import shared
 from modules.ui_components import FormRow
 
-class MobileSDQueue(scripts.Script):
+class StableQueue(scripts.Script):
     def __init__(self):
-        self.mobilesd_url = shared.opts.data.get("mobilesd_url", "http://localhost:3000")
-        self.api_key = shared.opts.data.get("mobilesd_api_key", "")
-        self.api_secret = shared.opts.data.get("mobilesd_api_secret", "")
+        self.stablequeue_url = shared.opts.data.get("stablequeue_url", "http://localhost:3000")
+        self.api_key = shared.opts.data.get("stablequeue_api_key", "")
+        self.api_secret = shared.opts.data.get("stablequeue_api_secret", "")
     
     # UI integration
     def ui(self, is_img2img):
         with gr.Group():
-            with gr.Accordion("MobileSD Queue", open=False):
+            with gr.Accordion("StableQueue Queue", open=False):
                 with FormRow():
-                    queue_btn = gr.Button("Queue in MobileSD", variant="primary")
+                    queue_btn = gr.Button("Queue in StableQueue", variant="primary")
                     priority = gr.Slider(minimum=1, maximum=10, value=5, step=1, label="Priority")
                 
                 with FormRow():
                     server_alias = gr.Dropdown(label="Target Server", choices=self.get_server_aliases())
-                    status_indicator = gr.HTML("<div>Not connected to MobileSD</div>")
+                    status_indicator = gr.HTML("<div>Not connected to StableQueue</div>")
         
         # Event handlers
-        queue_btn.click(fn=self.queue_in_mobilesd, inputs=[...])
+        queue_btn.click(fn=self.queue_in_stablequeue, inputs=[...])
         
         return [queue_btn, priority, server_alias, status_indicator]
     
-    # Send job to MobileSD
-    def queue_in_mobilesd(self, *args):
+    # Send job to StableQueue
+    def queue_in_stablequeue(self, *args):
         # Extract parameters from Forge UI
         params = self.extract_parameters(args)
         
-        # Send to MobileSD API
+        # Send to StableQueue API
         try:
             response = requests.post(
-                f"{self.mobilesd_url}/api/v2/generate",
+                f"{self.stablequeue_url}/api/v2/generate",
                 json={
                     "app_type": "forge",
                     "target_server_alias": params["server_alias"],
@@ -256,7 +256,7 @@ class MobileSDQueue(scripts.Script):
             )
             
             if response.status_code == 200:
-                job_id = response.json()["mobilesd_job_id"]
+                job_id = response.json()["stablequeue_job_id"]
                 return f"Job queued successfully. ID: {job_id}"
             else:
                 return f"Error: {response.json().get('error', 'Unknown error')}"
@@ -267,26 +267,26 @@ class MobileSDQueue(scripts.Script):
 ### 4.3 Frontend JavaScript Integration
 
 ```javascript
-// Add "Queue in MobileSD" button next to the Generate button
+// Add "Queue in StableQueue" button next to the Generate button
 onUiLoaded(() => {
     const generateBtn = document.querySelector('#txt2img_generate');
     if (!generateBtn) return;
     
     const queueBtn = document.createElement('button');
-    queueBtn.id = 'txt2img_queue_mobilesd';
+    queueBtn.id = 'txt2img_queue_stablequeue';
     queueBtn.className = generateBtn.className;
-    queueBtn.innerHTML = 'Queue in MobileSD';
+    queueBtn.innerHTML = 'Queue in StableQueue';
     queueBtn.style.backgroundColor = '#3498db';
     
     generateBtn.parentNode.insertBefore(queueBtn, generateBtn.nextSibling);
     
     queueBtn.addEventListener('click', () => {
-        // Open the MobileSD Queue tab in the accordion
-        const accordionBtn = document.querySelector('.accordion-button[data-bs-target="#mobilesd-queue-accordion"]');
+        // Open the StableQueue Queue tab in the accordion
+        const accordionBtn = document.querySelector('.accordion-button[data-bs-target="#stablequeue-queue-accordion"]');
         if (accordionBtn) accordionBtn.click();
         
-        // Trigger the Queue button in the MobileSD interface
-        document.querySelector('#mobilesd_queue_btn').click();
+        // Trigger the Queue button in the StableQueue interface
+        document.querySelector('#stablequeue_queue_btn').click();
     });
 });
 ```
@@ -297,19 +297,19 @@ onUiLoaded(() => {
 
 Instead of implementing a true "Generate Forever" option, which would be impractical and could overload the queue, the extension will provide two context menu options in Forge:
 
-1. **Send to MobileSD** - Sends the current generation settings as a single job
-2. **Send bulk job to MobileSD** - Sends multiple jobs with the same parameters but different seeds
+1. **Send to StableQueue** - Sends the current generation settings as a single job
+2. **Send bulk job to StableQueue** - Sends multiple jobs with the same parameters but different seeds
 
 This approach gives users the benefit of queuing multiple jobs without keeping their browser open, while maintaining control over system resources.
 
-### 5.2 MobileSD Tab in Forge Settings
+### 5.2 StableQueue Tab in Forge Settings
 
-A new "MobileSD" tab will be added to the Forge settings panel with the following options:
+A new "StableQueue" tab will be added to the Forge settings panel with the following options:
 
 ```python
-with gr.Tab("MobileSD"):
+with gr.Tab("StableQueue"):
     with FormRow():
-        mobilesd_url = gr.Textbox(label="MobileSD Server URL", value="http://localhost:3000")
+        stablequeue_url = gr.Textbox(label="StableQueue Server URL", value="http://localhost:3000")
         connection_status = gr.HTML("<div>Not connected</div>")
         test_connection_btn = gr.Button("Test Connection")
     
@@ -330,16 +330,16 @@ The extension will register two new options in the Forge context menu:
 
 ```python
 def on_ui_settings():
-    section = ('mobilesd', "MobileSD Integration")
-    shared.opts.add_option("enable_mobilesd_context_menu", shared.OptionInfo(
-        True, "Add MobileSD options to generation context menu", section=section
+    section = ('stablequeue', "StableQueue Integration")
+    shared.opts.add_option("enable_stablequeue_context_menu", shared.OptionInfo(
+        True, "Add StableQueue options to generation context menu", section=section
     ))
 
 # Register context menu items
 def context_menu_entries():
     return [
-        {"label": "Send to MobileSD", "action": "mobilesdqueue_send_single", "tooltip": "Send current generation to MobileSD queue"},
-        {"label": "Send bulk job to MobileSD", "action": "mobilesdqueue_send_bulk", "tooltip": "Send multiple jobs with current settings to MobileSD queue"}
+        {"label": "Send to StableQueue", "action": "stablequeue_send_single", "tooltip": "Send current generation to StableQueue queue"},
+        {"label": "Send bulk job to StableQueue", "action": "stablequeue_send_bulk", "tooltip": "Send multiple jobs with current settings to StableQueue queue"}
     ]
 
 # Register JavaScript callbacks
@@ -347,14 +347,14 @@ js_callbacks = [
     """
     function(params) {
         // Send single job
-        fetch('/mobilesdqueue/send_single', {
+        fetch('/stablequeue/send_single', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(params)
         }).then(response => response.json())
           .then(data => {
               // Show notification
-              params.notification = { text: `Job sent to MobileSD: ${data.mobilesd_job_id}` };
+              params.notification = { text: `Job sent to StableQueue: ${data.stablequeue_job_id}` };
               return params;
           });
     }
@@ -362,14 +362,14 @@ js_callbacks = [
     """
     function(params) {
         // Send bulk job
-        fetch('/mobilesdqueue/send_bulk', {
+        fetch('/stablequeue/send_bulk', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(params)
         }).then(response => response.json())
           .then(data => {
               // Show notification
-              params.notification = { text: `Bulk job sent to MobileSD: ${data.count} jobs queued` };
+              params.notification = { text: `Bulk job sent to StableQueue: ${data.count} jobs queued` };
               return params;
           });
     }
@@ -381,7 +381,7 @@ js_callbacks = [
 
 #### 5.4.1 Bulk Job Submission Endpoint
 
-Create a new endpoint in the MobileSD API to handle bulk job submissions:
+Create a new endpoint in the StableQueue API to handle bulk job submissions:
 
 ```
 POST /api/v2/generate/bulk
@@ -417,8 +417,8 @@ Response:
   "success": true,
   "bulk_job_id": "bulk_2a7b8901",
   "jobs": [
-    {"mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66", "queue_position": 1},
-    {"mobilesd_job_id": "99726d0e-82fd-5914-99c1-25f6273f7d77", "queue_position": 2},
+    {"stablequeue_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66", "queue_position": 1},
+    {"stablequeue_job_id": "99726d0e-82fd-5914-99c1-25f6273f7d77", "queue_position": 2},
     // ... additional jobs
   ],
   "total_jobs": 10
@@ -449,9 +449,9 @@ Response:
   "progress_percentage": 35,
   "jobs": [
     {
-      "mobilesd_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
+      "stablequeue_job_id": "88615c9d-71ec-4803-88b0-14f5162f6c66",
       "status": "completed",
-      "preview_url": "http://mobilesd-server:3000/api/v1/images/preview/88615c9d_00001.png"
+      "preview_url": "http://stablequeue-server:3000/api/v1/images/preview/88615c9d_00001.png"
     },
     // ... other jobs
   ]
@@ -487,13 +487,13 @@ The extension will handle bulk job submission by:
 
 ```python
 def send_bulk_job(self, params):
-     bulk_quantity = shared.opts.data.get("mobilesd_bulk_quantity", 10)
+     bulk_quantity = shared.opts.data.get("stablequeue_bulk_quantity", 10)
     # Validate bulk quantity limits
     if bulk_quantity < 1 or bulk_quantity > 100:
         return {"success": False, "message": "Bulk quantity must be between 1 and 100"}
     
-     seed_variation = shared.opts.data.get("mobilesd_seed_variation", "random")
-     job_delay = shared.opts.data.get("mobilesd_job_delay", 5)
+     seed_variation = shared.opts.data.get("stablequeue_seed_variation", "random")
+     job_delay = shared.opts.data.get("stablequeue_job_delay", 5)
     # Limit job delay to prevent abuse
     job_delay = max(0, min(job_delay, 30))
     base_seed = params.get("seed", -1)
@@ -510,10 +510,10 @@ def send_bulk_job(self, params):
         "generation_params": self.extract_parameters(params)
     }
     
-    # Send to MobileSD API
+    # Send to StableQueue API
     try:
         response = requests.post(
-            f"{self.mobilesd_url}/api/v2/generate/bulk",
+            f"{self.stablequeue_url}/api/v2/generate/bulk",
             json=bulk_request,
             headers={
                 "Content-Type": "application/json",
@@ -528,7 +528,7 @@ def send_bulk_job(self, params):
                 "success": True,
                 "bulk_job_id": data["bulk_job_id"],
                 "total_jobs": data["total_jobs"],
-                "message": f"Successfully queued {data['total_jobs']} jobs in MobileSD"
+                "message": f"Successfully queued {data['total_jobs']} jobs in StableQueue"
             }
         else:
             return {
@@ -538,7 +538,7 @@ def send_bulk_job(self, params):
     except Exception as e:
         return {
             "success": False,
-            "message": f"Error connecting to MobileSD: {str(e)}"
+            "message": f"Error connecting to StableQueue: {str(e)}"
         }
 ```
 
@@ -574,7 +574,7 @@ def create_bulk_monitor_ui():
    - Implement bulk job tracking and cancellation APIs
 
 2. **Forge Extension UI Components** (2-3 days)
-   - Create MobileSD settings tab
+   - Create StableQueue settings tab
    - Implement context menu options
    - Build bulk job monitoring panel
 

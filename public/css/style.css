@@ -15,6 +15,8 @@
     --completed-color: #27ae60;
     --failed-color: #e74c3c;
     --cancelled-color: #95a5a6;
+    --active-color: #2ecc71;
+    --inactive-color: #95a5a6;
 }
 
 * {
@@ -1877,4 +1879,152 @@ button {
     border-radius: 4px;
     font-size: 0.7rem;
     font-weight: bold;
+}
+
+/* API Key Management Styles */
+#api-keys-view h2 {
+    margin-bottom: 1.5rem;
+}
+
+.api-keys-controls {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
+#api-keys-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+#api-keys-table th,
+#api-keys-table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#api-keys-table th {
+    font-weight: 600;
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+#api-keys-table tr:hover {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+.api-key-name {
+    font-weight: 500;
+}
+
+.api-key-description {
+    color: #666;
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.api-key-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.small-button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}
+
+.small-button.danger {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.status-active {
+    background-color: rgba(46, 204, 113, 0.15);
+    color: var(--active-color);
+}
+
+.status-inactive {
+    background-color: rgba(149, 165, 166, 0.15);
+    color: var(--inactive-color);
+}
+
+#api-key-form-container,
+#api-key-result-container {
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+#api-key-form-title {
+    margin-bottom: 1.5rem;
+}
+
+.form-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.alert {
+    padding: 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+}
+
+.alert-warning {
+    background-color: rgba(243, 156, 18, 0.15);
+    color: var(--warning-color);
+    border: 1px solid rgba(243, 156, 18, 0.3);
+}
+
+.api-key-result {
+    background-color: rgba(52, 152, 219, 0.05);
+    border: 1px solid rgba(52, 152, 219, 0.2);
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.api-key-details {
+    margin-top: 1rem;
+}
+
+.api-key-details p {
+    margin-bottom: 0.5rem;
+}
+
+.key-details {
+    padding: 1rem;
+    background-color: rgba(52, 152, 219, 0.05);
+    border-radius: 4px;
+}
+
+.key-details p {
+    margin-bottom: 0.75rem;
+    line-height: 1.4;
+}
+
+#api-key-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.error-message {
+    color: var(--danger-color);
+    text-align: center;
+    padding: 1rem;
 }

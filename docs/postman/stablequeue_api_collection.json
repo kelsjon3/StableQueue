@@ -1,0 +1,318 @@
+{
+  "info": {
+    "name": "StableQueue API",
+    "description": "API collection for StableQueue with v2 endpoints for extension support",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Create API Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My Extension Key\",\n  \"description\": \"API key for testing the extension\",\n  \"tier\": \"standard\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/apikeys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys"
+              ]
+            },
+            "description": "Create a new API key for authentication"
+          }
+        },
+        {
+          "name": "List API Keys",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/apikeys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys"
+              ]
+            },
+            "description": "Get a list of all API keys"
+          }
+        },
+        {
+          "name": "Get API Key",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/apikeys/{{apiKeyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys",
+                "{{apiKeyId}}"
+              ]
+            },
+            "description": "Get details of a specific API key"
+          }
+        },
+        {
+          "name": "Update API Key",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Key Name\",\n  \"description\": \"Updated description\",\n  \"tier\": \"premium\",\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/apikeys/{{apiKeyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys",
+                "{{apiKeyId}}"
+              ]
+            },
+            "description": "Update an existing API key"
+          }
+        },
+        {
+          "name": "Delete API Key",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/apikeys/{{apiKeyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys",
+                "{{apiKeyId}}"
+              ]
+            },
+            "description": "Delete an API key"
+          }
+        }
+      ],
+      "description": "Endpoints for managing API keys"
+    },
+    {
+      "name": "v2 API",
+      "item": [
+        {
+          "name": "Submit Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"app_type\": \"forge\",\n  \"target_server_alias\": \"{{serverAlias}}\",\n  \"generation_params\": {\n    \"positive_prompt\": \"a beautiful landscape\",\n    \"negative_prompt\": \"ugly, blurry\",\n    \"checkpoint_name\": \"models/v1-5-pruned-emaonly.safetensors\",\n    \"width\": 512,\n    \"height\": 512,\n    \"steps\": 20,\n    \"cfg_scale\": 7,\n    \"sampler_name\": \"Euler\",\n    \"restore_faces\": false,\n    \"scheduler_or_quality_preset\": \"Balanced\"\n  },\n  \"source_info\": \"postman_testing_v1.0.0\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/generate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "generate"
+              ]
+            },
+            "description": "Submit a new generation job with the v2 API"
+          }
+        },
+        {
+          "name": "Get Job Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/jobs/{{jobId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "jobs",
+                "{{jobId}}",
+                "status"
+              ]
+            },
+            "description": "Get the status of a specific job with extension-specific fields"
+          }
+        },
+        {
+          "name": "List All Jobs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "jobs"
+              ]
+            },
+            "description": "Get a list of all jobs"
+          }
+        },
+        {
+          "name": "List Jobs with Filtering",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/jobs?app_type=forge&status=pending&limit=10&offset=0&order=desc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "app_type",
+                  "value": "forge"
+                },
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "order",
+                  "value": "desc"
+                }
+              ]
+            },
+            "description": "Get a filtered list of jobs with pagination"
+          }
+        },
+        {
+          "name": "Cancel Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/jobs/{{jobId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "jobs",
+                "{{jobId}}",
+                "cancel"
+              ]
+            },
+            "description": "Cancel a pending or processing job"
+          }
+        }
+      ],
+      "description": "v2 API endpoints for extension support"
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "your_api_key_here",
+      "type": "string"
+    },
+    {
+      "key": "apiKeyId",
+      "value": "your_api_key_id_here",
+      "type": "string"
+    },
+    {
+      "key": "serverAlias",
+      "value": "Main",
+      "type": "string"
+    },
+    {
+      "key": "jobId",
+      "value": "your_job_id_here",
+      "type": "string"
+    }
+  ]
+} 

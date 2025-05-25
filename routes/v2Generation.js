@@ -4,6 +4,7 @@ const jobQueue = require('../utils/jobQueueHelpers');
 const { readServersConfig } = require('../utils/configHelpers');
 const apiLogger = require('../utils/apiLogger');
 const { apiAuthWithJobRateLimit } = require('../middleware/apiMiddleware');
+const { handleApiError } = require('../utils/apiErrorHandler');
 
 /**
  * @route POST /api/v2/generate
@@ -25,26 +26,16 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
 
     // Validation
     if (!target_server_alias) {
-        apiLogger.logApiError('Missing target_server_alias in request', {
-            request: requestInfo,
-            error: 'missing_target_server'
-        });
-        
-        return res.status(400).json({ 
-            success: false,
-            error: 'target_server_alias is required' 
+        return handleApiError(res, 'MISSING_REQUIRED_FIELD', req, {
+            field: 'target_server_alias',
+            customMessage: 'target_server_alias is required'
         });
     }
 
     if (!generation_params || typeof generation_params !== 'object' || Object.keys(generation_params).length === 0) {
-        apiLogger.logApiError('Invalid or empty generation_params in request', {
-            request: requestInfo,
-            error: 'invalid_generation_params'
-        });
-        
-        return res.status(400).json({ 
-            success: false,
-            error: 'Invalid or empty generation_params object provided' 
+        return handleApiError(res, 'INVALID_FIELD_VALUE', req, {
+            field: 'generation_params',
+            customMessage: 'Invalid or empty generation_params object provided'
         });
     }
 
@@ -53,65 +44,41 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
     
     // More robust checkpoint parameter normalization
     console.log(`[API v2] Checking generation parameters for app_type: ${validAppType}`);
-
-    // Handle app-specific validation
-    if (validAppType === 'forge') {
-        // Normalize the checkpoint parameter for Forge
-        console.log('[API v2] Checking generation parameters for checkpoint:', JSON.stringify({
-            checkpoint_name: generation_params.checkpoint_name,
-            sd_checkpoint: generation_params.sd_checkpoint
-        }));
-
-        if (!generation_params.checkpoint_name && generation_params.sd_checkpoint) {
-            console.log(`[API v2] Converting sd_checkpoint parameter to checkpoint_name: ${generation_params.sd_checkpoint}`);
-            generation_params.checkpoint_name = generation_params.sd_checkpoint;
-            // Keep sd_checkpoint for backward compatibility
-        } else if (!generation_params.checkpoint_name && !generation_params.sd_checkpoint) {
-            console.error('[API v2] No checkpoint parameter found in request!');
-            
-            apiLogger.logApiError('Missing checkpoint parameter in request', {
-                request: requestInfo,
-                error: 'missing_checkpoint'
-            });
-            
-            return res.status(400).json({ 
-                success: false,
-                error: 'Missing checkpoint parameter. Please provide checkpoint_name in generation parameters.'
-            });
+    
+    if (generation_params.checkpoint_name && validAppType === 'forge') {
+        // Normalize checkpoint paths for Forge
+        console.log(`[API v2] Normalizing checkpoint path: ${generation_params.checkpoint_name}`);
+        try {
+            // Convert both forward and backslashes to system-specific separator
+            const normalizedPath = generation_params.checkpoint_name.replace(/[\/\\]+/g, '/');
+            generation_params.checkpoint_name = normalizedPath;
+            console.log(`[API v2] Normalized checkpoint path: ${normalizedPath}`);
+        } catch (error) {
+            console.error(`[API v2] Error normalizing checkpoint path:`, error);
+            // Continue with original path if normalization fails
         }
-
-        // Verify we have a checkpoint_name now
-        console.log(`[API v2] Using checkpoint_name: ${generation_params.checkpoint_name}`);
     }
-    // Add validation for other app types when implemented (e.g., 'comfyui')
-
+    
+    // Validate the target server exists in config
     try {
-        // Validate server alias
         const servers = await readServersConfig();
         if (!servers.find(s => s.alias === target_server_alias)) {
-            apiLogger.logApiError(`Server with alias '${target_server_alias}' not found`, {
-                request: requestInfo,
-                error: 'server_not_found',
-                target_server_alias
-            });
-            
-            return res.status(404).json({ 
-                success: false,
-                error: `Server with alias '${target_server_alias}' not found.` 
+            return handleApiError(res, 'SERVER_NOT_FOUND', req, {
+                alias: target_server_alias,
+                customMessage: `Server with alias '${target_server_alias}' not found.`
             });
         }
     } catch (err) {
-        console.error("[API v2] Error reading server config while validating alias:", err);
-        
-        apiLogger.logApiError('Failed to validate server alias', {
-            request: requestInfo,
-            error: 'server_validation_error',
-            errorMessage: err.message
-        });
-        
-        return res.status(500).json({ 
-            success: false,
-            error: 'Failed to validate server alias' 
+        console.error(`[API v2] Error reading server config:`, err);
+        return handleApiError(res, 'SERVER_CONFIG_ERROR', req, {
+            customMessage: 'Failed to validate server alias'
+        }, err);
+    }
+    
+    // Prepare for rate limiting - ensure we have a key ID from middleware
+    if (!req.apiKeyId) {
+        return handleApiError(res, 'AUTHENTICATION_REQUIRED', req, {
+            customMessage: 'Authentication error: API key ID not found'
         });
     }
 
@@ -154,18 +121,200 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
         });
     } catch (error) {
         console.error(`[API v2] Failed to add job to queue:`, error);
+        return handleApiError(res, 'QUEUE_ERROR', req, {
+            customMessage: 'Failed to add job to queue'
+        }, error);
+    }
+});
+
+/**
+ * @route GET /api/v2/jobs/:jobId/status
+ * @description Get status of a specific job with additional extension-relevant fields
+ * @access Requires API key
+ */
+router.get('/jobs/:jobId/status', apiAuthWithJobRateLimit, (req, res) => {
+    const { jobId } = req.params;
+    console.log(`[API v2] Received GET /api/v2/jobs/${jobId}/status request`);
+
+    if (!jobId) {
+        return handleApiError(res, 'MISSING_REQUIRED_FIELD', req, {
+            field: 'jobId',
+            customMessage: 'Job ID is required.'
+        });
+    }
+
+    try {
+        const job = jobQueue.getJobById(jobId);
+
+        if (!job) {
+            return handleApiError(res, 'JOB_NOT_FOUND', req, {
+                job_id: jobId,
+                customMessage: `Job with ID '${jobId}' not found.`
+            });
+        }
+
+        // Log successful job status request
+        apiLogger.logApiAccess('Job status request successful', {
+            request: apiLogger.getSafeRequestInfo(req),
+            job_id: jobId,
+            app_type: job.app_type || 'forge',
+            status: job.status
+        });
+
+        // Enhanced response with additional fields for extensions
+        res.status(200).json({
+            success: true,
+            job: {
+                mobilesd_job_id: job.mobilesd_job_id,
+                status: job.status,
+                creation_timestamp: job.creation_timestamp,
+                last_updated_timestamp: job.last_updated_timestamp,
+                completion_timestamp: job.completion_timestamp,
+                target_server_alias: job.target_server_alias,
+                forge_session_hash: job.forge_session_hash,
+                generation_params: job.generation_params,
+                result_details: job.result_details,
+                retry_count: job.retry_count,
+                // Additional fields for extensions
+                app_type: job.app_type || 'forge',
+                source_info: job.source_info || 'ui',
+                api_key_id: job.api_key_id,
+                queue_position: job.status === 'pending' ? 
+                    jobQueue.findPendingJobs().findIndex(j => j.mobilesd_job_id === job.mobilesd_job_id) + 1 : 
+                    null,
+                estimated_time_remaining: job.status === 'processing' ? 
+                    Math.max(0, (job.generation_params.steps || 20) * 1.5 - 
+                    ((Date.now() - new Date(job.last_updated_timestamp).getTime()) / 1000)) : 
+                    null
+            }
+        });
+    } catch (error) {
+        console.error(`[API v2] Error fetching status for job ${jobId}:`, error);
+        return handleApiError(res, 'DATABASE_ERROR', req, {
+            job_id: jobId,
+            customMessage: 'Failed to retrieve job status.'
+        }, error);
+    }
+});
+
+/**
+ * @route GET /api/v2/jobs
+ * @description Get all jobs with filtering by app_type and other criteria
+ * @access Requires API key
+ */
+router.get('/jobs', apiAuthWithJobRateLimit, (req, res) => {
+    console.log('[API v2] Received GET /api/v2/jobs request');
+    
+    try {
+        // Parse query parameters with app_type support
+        const options = {
+            status: req.query.status,
+            app_type: req.query.app_type, // New filter parameter
+            limit: req.query.limit ? parseInt(req.query.limit, 10) : undefined,
+            offset: req.query.offset ? parseInt(req.query.offset, 10) : undefined,
+            order: req.query.order === 'asc' ? 'ASC' : 'DESC'
+        };
         
-        apiLogger.logApiError('Failed to add job to queue', {
-            request: requestInfo,
-            error: 'queue_error',
-            errorMessage: error.message
+        // Get jobs with enhanced filtering
+        const jobs = jobQueue.getAllJobs(options);
+        
+        // Log successful jobs request
+        apiLogger.logApiAccess('Jobs list request successful', {
+            request: apiLogger.getSafeRequestInfo(req),
+            filters: {
+                status: options.status,
+                app_type: options.app_type,
+                limit: options.limit,
+                offset: options.offset
+            },
+            total_jobs: jobs.length
         });
         
-        res.status(500).json({ 
-            success: false,
-            error: 'Failed to add job to queue',
-            message: error.message
+        // Enhanced response with additional metadata
+        res.status(200).json({
+            success: true,
+            total: jobs.length,
+            filters: {
+                status: options.status,
+                app_type: options.app_type,
+                limit: options.limit,
+                offset: options.offset,
+                order: options.order
+            },
+            jobs: jobs
         });
+    } catch (error) {
+        console.error('[API v2] Error fetching jobs:', error);
+        return handleApiError(res, 'DATABASE_ERROR', req, {
+            customMessage: 'Failed to retrieve jobs.'
+        }, error);
+    }
+});
+
+/**
+ * @route POST /api/v2/jobs/:jobId/cancel
+ * @description Cancel a job
+ * @access Requires API key
+ */
+router.post('/jobs/:jobId/cancel', apiAuthWithJobRateLimit, (req, res) => {
+    const { jobId } = req.params;
+    console.log(`[API v2] Received POST /api/v2/jobs/${jobId}/cancel request`);
+    
+    if (!jobId) {
+        return handleApiError(res, 'MISSING_REQUIRED_FIELD', req, {
+            field: 'jobId',
+            customMessage: 'Job ID is required.'
+        });
+    }
+    
+    try {
+        // First check if the job exists and get its current status
+        const job = jobQueue.getJobById(jobId);
+        
+        if (!job) {
+            return handleApiError(res, 'JOB_NOT_FOUND', req, {
+                job_id: jobId,
+                customMessage: `Job with ID '${jobId}' not found.`
+            });
+        }
+        
+        // Only jobs in 'pending' or 'processing' status can be cancelled
+        if (job.status !== 'pending' && job.status !== 'processing') {
+            return handleApiError(res, 'JOB_OPERATION_INVALID', req, {
+                job_id: jobId,
+                current_status: job.status,
+                customMessage: `Cannot cancel job with status '${job.status}'. Only 'pending' or 'processing' jobs can be cancelled.`
+            });
+        }
+        
+        // Cancel the job
+        const updatedJob = jobQueue.cancelJob(jobId);
+        
+        if (!updatedJob) {
+            return handleApiError(res, 'QUEUE_ERROR', req, {
+                job_id: jobId,
+                customMessage: 'Failed to cancel job.'
+            });
+        }
+        
+        // Log successful cancellation
+        apiLogger.logApiAccess('Job cancelled successfully', {
+            request: apiLogger.getSafeRequestInfo(req),
+            job_id: jobId,
+            app_type: updatedJob.app_type || 'forge'
+        });
+        
+        res.status(200).json({
+            success: true,
+            message: 'Job cancelled successfully.',
+            job: updatedJob
+        });
+    } catch (error) {
+        console.error(`[API v2] Error cancelling job ${jobId}:`, error);
+        return handleApiError(res, 'DATABASE_ERROR', req, {
+            job_id: jobId,
+            customMessage: `Failed to cancel job: ${error.message}`
+        }, error);
     }
 });
 
