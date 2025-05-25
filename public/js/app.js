@@ -110,14 +110,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentJob = job;
                 updateProgressUI(job);
                 
-                // If the job is complete, display the results
+                // If the job is complete, log it
                 if (job.status === 'completed' && job.result_details) {
-                    // Log that we're about to display completed job images
-                    console.log('Job completed, displaying results:', job.mobilesd_job_id);
+                    // Log that the job completed
+                    console.log('Job completed:', job.mobilesd_job_id);
                     console.log('Result details available:', !!job.result_details);
                     console.log('Saved filenames:', job.result_details?.saved_filenames);
                     console.log('Legacy images field:', job.result_details?.images);
-                    displayCompletedJobImages(job);
                 }
             }
         });
@@ -194,18 +193,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // Now handle current job progress UI update
                 if (jobId === currentJobId) {
-                    // Update progress bar
-                    if (progressBar) {
-                        progressBar.value = progress_percentage;
-                        progressText.textContent = `Processing: ${progress_percentage.toFixed(1)}%`;
-                    }
-                    
-                    // Update preview image if available
-                    if (preview_image && preview_image.length > 0 && progressImagePreview) {
-                        console.log(`Updating progress image preview with: ${preview_image}`);
-                        progressImagePreview.src = `/outputs/${preview_image}?t=${Date.now()}`;
-                        progressImagePreview.style.display = 'block';
-                    }
+                    // We no longer have the generator progress UI elements
+                    console.log(`Job progress update received for current job: ${progress_percentage}%`);
                 }
             } catch (err) {
                 console.error('Error updating job progress in UI:', err);
@@ -219,55 +208,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateProgressUI(job) {
         if (!job) return;
         
-        const status = job.status;
-        
-        // Update progress elements based on status
-        if (progressBar && progressText) {
-            switch (status) {
-                case 'pending':
-                    progressBar.value = 0;
-                    progressText.textContent = 'Pending: Waiting to start...';
-                    progressImagePreview.style.display = 'none';
-                    break;
-                    
-                case 'processing':
-                    // Get progress from result_details if available
-                    const progress = job.result_details && job.result_details.progress_percentage 
-                        ? job.result_details.progress_percentage 
-                        : 0;
-                    
-                    progressBar.value = progress;
-                    progressText.textContent = `Processing: ${progress}%`;
-                    
-                    // Check for preview image
-                    if (job.result_details && job.result_details.preview_image) {
-                        progressImagePreview.src = `/outputs/${job.result_details.preview_image}`;
-                        progressImagePreview.style.display = 'block';
-                    }
-                    break;
-                    
-                case 'completed':
-                    progressBar.value = 100;
-                    progressText.textContent = 'Completed';
-                    break;
-                    
-                case 'failed':
-                    progressBar.value = 0;
-                    progressText.textContent = `Failed: ${job.result_details && job.result_details.error 
-                        ? job.result_details.error 
-                        : 'Unknown error'}`;
-                    break;
-                    
-                case 'cancelled':
-                    progressBar.value = 0;
-                    progressText.textContent = 'Cancelled';
-                    break;
-                    
-                default:
-                    progressBar.value = 0;
-                    progressText.textContent = `Unknown status: ${status}`;
-            }
-        }
+        // We no longer need to update generator progress UI,
+        // but we keep this function for potential future use with the queue
+        console.log(`Progress update for job ${job.mobilesd_job_id}: ${job.status}`);
     }
 
     // Function to update a job row in the queue table
@@ -333,10 +276,6 @@ document.addEventListener('DOMContentLoaded', () => {
             loadQueueJobs();
         }
     }
-
-
-
-
 
     // Function to fetch and display servers on the Server Setup page
     async function fetchAndDisplayServers() {
@@ -520,8 +459,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-
-
     // Navigation
     function showView(viewToShow, buttonToActivate) {
         // Hide all views
@@ -586,11 +523,6 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error('One or more navigation elements or views not found.');
     }
     
-    // ... existing code ...
-
-
-
     // Initialize WebSocket client when page loads
     initializeJobClient();
-
 });
