@@ -16,8 +16,8 @@ This document serves as the definitive source for determining what to work on ne
 - [x] Implement API key generation mechanism with secure random strings
 - [x] Create API key validation and middleware for authentication
 - [x] Add endpoints for API key management (create, list, delete, update)
-- [ ] Implement logging for API key usage and access attempts
-- [ ] Add rate limiting based on API key
+- [x] Implement logging for API key usage and access attempts
+- [x] Add rate limiting based on API key
 - [ ] Create UI for managing API keys
 
 ### API Standardization (for Extension Support)
@@ -37,11 +37,18 @@ This document serves as the definitive source for determining what to work on ne
 
 ### Forge Extension Development
 - [ ] Create basic extension structure (Python backend, JS frontend)
-- [ ] Add "Queue in MobileSD" button to Forge UI
+- [ ] Add "Send to MobileSD" option to right-click context menu in Forge UI
+- [ ] Add "Send bulk job to MobileSD" option to right-click context menu in Forge UI
+- [ ] Create a "MobileSD" tab in Forge settings for configuration options
+- [ ] Implement bulk job quantity setting in MobileSD tab
 - [ ] Implement parameter capture from Forge UI
+- [ ] Add seed variation for bulk jobs
+- [ ] Implement bulk job tracking with shared bulk_job_id
 - [ ] Establish secure communication with MobileSD API
 - [ ] Add configuration panel for server URL and API credentials
 - [ ] Implement job status monitoring within extension
+- [ ] Add progress indicator for bulk jobs
+- [ ] Create cancellation mechanism for remaining jobs in a bulk submission
 
 ### Error Handling & Robustness
 - [ ] Add reconnection logic for server disconnections
@@ -111,6 +118,7 @@ This document serves as the definitive source for determining what to work on ne
 - [x] Database schema updates for extension support
 - [x] API key management system
 - [x] V2 API endpoint for job submission
+- [x] Rate limiting for API endpoints based on API key tiers
 
 ## Task Dependencies
 

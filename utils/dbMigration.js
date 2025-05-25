@@ -135,19 +135,36 @@ function runMigration(options = {}) {
                     created_at TEXT NOT NULL,
                     last_used TEXT,
                     is_active BOOLEAN DEFAULT 1,
-                    permissions TEXT
+                    permissions TEXT,
+                    rate_limit_tier TEXT DEFAULT 'default',
+                    custom_rate_limits TEXT
                 );
                 
                 CREATE INDEX idx_api_keys_key ON api_keys (key);
             `);
             log('api_keys table created successfully');
         } else {
-            log('api_keys table already exists, skipping');
+            // Add rate limiting columns to the api_keys table if they don't exist
+            if (!columnExists('api_keys', 'rate_limit_tier')) {
+                log('Adding rate_limit_tier column to api_keys table...');
+                db.exec('ALTER TABLE api_keys ADD COLUMN rate_limit_tier TEXT DEFAULT "default"');
+                log('rate_limit_tier column added successfully');
+            } else {
+                log('rate_limit_tier column already exists, skipping');
+            }
+            
+            if (!columnExists('api_keys', 'custom_rate_limits')) {
+                log('Adding custom_rate_limits column to api_keys table...');
+                db.exec('ALTER TABLE api_keys ADD COLUMN custom_rate_limits TEXT');
+                log('custom_rate_limits column added successfully');
+            } else {
+                log('custom_rate_limits column already exists, skipping');
+            }
         }
         
         // 5. Update existing 'ui' jobs with source_info
         log('Updating existing jobs with source_info = "ui"...');
-        db.exec(`UPDATE jobs SET source_info = "ui" WHERE source_info IS NULL`);
+        db.exec(`UPDATE jobs SET source_info = 'ui' WHERE source_info IS NULL`);
         log('Existing jobs updated successfully');
         
         // Commit the transaction

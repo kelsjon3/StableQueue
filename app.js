@@ -7,6 +7,7 @@ const { startDispatcher, stopDispatcher } = require('./services/gradioJobDispatc
 const { readServersConfig, addServerConfig, updateServerConfig, deleteServerConfig, initializeDataDirectory } = require('./utils/configHelpers');
 const { readJobQueue, addJobToQueue, getJobById } = require('./utils/jobQueueHelpers');
 const { runMigration } = require('./utils/dbMigration'); // Import the database migration function
+const { globalRateLimiter } = require('./utils/apiRateLimiter'); // Import global rate limiter
 const serversRouter = require('./routes/servers');
 const resourcesRouter = require('./routes/resources');
 const civitaiRouter = require('./routes/civitai');
@@ -57,6 +58,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve generated images from the outputs directory
 app.use('/outputs', express.static(STABLE_DIFFUSION_SAVE_PATH));
+
+// Apply global rate limiting to all API routes
+app.use('/api', globalRateLimiter);
 
 // API routes
 app.use('/api/v1/servers', serversRouter);
