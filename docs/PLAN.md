@@ -1,6 +1,18 @@
-# Project Plan: MobileSD - Stable Diffusion Web UI & API Intermediary (Revised)
+# Project Plan: StableQueue - Stable Diffusion Job Queue System
 
-*This plan has been significantly updated to reflect a single-container Docker strategy and incorporate advanced features including dynamic server configuration, local resource management (with a phased approach for on-demand model syncing), and Civitai API integration.*
+*StableQueue is a robust, straightforward job queuing system for Stable Diffusion that works immediately upon startup. No complex setup flows or special initialization required - just start the application and begin using it.*
+
+## Core Application Philosophy
+
+StableQueue follows a simple, predictable flow:
+
+1. **Application starts** - Works immediately, no setup required
+2. **Add servers** - Connect to your Stable Diffusion instances as needed  
+3. **Generate API keys** - Create them when needed for external applications
+4. **Manage jobs** - Queue, monitor, and view results
+5. **View images** - See generated content in the frontend gallery
+
+**Key Principle**: Creating the 1st API key works exactly like creating the 100th API key. No special "first-time setup" behavior.
 
 ## I. Core Architectural Change: Adopt a Single Docker Container Strategy
 

@@ -124,14 +124,6 @@
                          <input type="url" id="server-api-url" required>
                      </div>
                      <div class="form-group">
-                         <label for="server-model-root-path">Model Root Path:</label>
-                         <div class="input-with-button">
-                            <input type="text" id="server-model-root-path" placeholder="Path to models directory">
-                            <button type="button" id="browse-model-path-btn" class="secondary-button">Browse...</button>
-                         </div>
-                         <small>Base directory where your model folders (Stable-diffusion, Lora, etc.) are located.</small>
-                     </div>
-                     <div class="form-group">
                          <label>Authentication (Basic Auth):</label>
                          <div>
                             <label for="server-auth-user">Username:</label>
@@ -163,7 +155,6 @@
                             <tr>
                                 <th>Name</th>
                                 <th>Description</th>
-                                <th>Tier</th>
                                 <th>Created</th>
                                 <th>Status</th>
                                 <th>Actions</th>
@@ -191,14 +182,6 @@
                         <label for="api-key-description">Description:</label>
                         <textarea id="api-key-description" rows="2"></textarea>
                         <small>Optional description of what this key is used for</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="api-key-tier">Tier:</label>
-                        <select id="api-key-tier">
-                            <option value="standard">Standard (60 req/min)</option>
-                            <option value="premium">Premium (300 req/min)</option>
-                        </select>
-                        <small>Rate limit tier for this API key</small>
                     </div>
                     <div class="form-group" id="api-key-active-group">
                         <label>
@@ -229,7 +212,6 @@
                     <div class="api-key-details">
                         <p><strong>ID:</strong> <span id="new-api-key-id"></span></p>
                         <p><strong>Name:</strong> <span id="new-api-key-name"></span></p>
-                        <p><strong>Tier:</strong> <span id="new-api-key-tier"></span></p>
                         <p><strong>Created:</strong> <span id="new-api-key-created"></span></p>
                     </div>
                 </div>

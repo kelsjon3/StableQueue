@@ -350,26 +350,8 @@ async function processJob(job) {
     
     // Check if we need to prepend model root path - only for local path checking
     let full_local_path = checkpoint_name;
-    let isWindowsServer = false;
+    let isWindowsServer = false; // Default to false (Linux-style paths)
     
-    if (serverDetails.modelRootPath) {
-        // Detect if server is Windows based on modelRootPath format
-        isWindowsServer = serverDetails.modelRootPath.includes('\\') || serverDetails.modelRootPath.includes(':');
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Detected server type: ${isWindowsServer ? 'Windows' : 'Linux/Unix'}`);
-        
-        // Ensure there's a trailing slash on the root path with the appropriate separator
-        const separator = isWindowsServer ? '\\' : '/';
-        const rootPath = serverDetails.modelRootPath.endsWith('/') || serverDetails.modelRootPath.endsWith('\\') 
-            ? serverDetails.modelRootPath 
-            : `${serverDetails.modelRootPath}${separator}`;
-            
-        // Create full local path for debugging only
-        full_local_path = `${rootPath}${checkpoint_name}`;
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Model root path is: "${rootPath}" - Full local path would be: "${full_local_path}"`);
-        
-        // IMPORTANT: We don't modify the actual checkpoint_name here - we send the original name to Forge
-    }
-
     const forge_session_hash = uuidv4();
     const forgeInternalTaskId = `task(${uuidv4().replace(/-/g, "")})`; 
 
@@ -420,17 +402,9 @@ async function processJob(job) {
             sd_model_checkpoint: original_checkpoint_name
         };
         
-        // Normalize checkpoint path based on detected server type
-        let normalizedCheckpoint;
-        if (isWindowsServer) {
-            // For Windows servers, convert forward slashes to backslashes
-            normalizedCheckpoint = original_checkpoint_name.replace(/\//g, '\\');
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${original_checkpoint_name}', normalized for Windows to: '${normalizedCheckpoint}'`);
-        } else {
-            // For Linux servers, keep forward slashes (or convert backslashes to forward slashes if present)
-            normalizedCheckpoint = original_checkpoint_name.replace(/\\/g, '/');
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${original_checkpoint_name}', normalized for Linux to: '${normalizedCheckpoint}'`);
-        }
+        // Normalize checkpoint path - default to forward slashes
+        let normalizedCheckpoint = original_checkpoint_name.replace(/\\/g, '/');
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${original_checkpoint_name}', normalized to: '${normalizedCheckpoint}' (assuming Linux/forward-slash paths).`);
         
         // Use the normalized path
         optionsPayload.sd_model_checkpoint = normalizedCheckpoint;
@@ -443,7 +417,7 @@ async function processJob(job) {
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Preparing generation request with override_settings for checkpoint '${normalizedCheckpoint}'`);
         
         // Construct generation data array for Gradio API
-        const generationDataArray = constructGenerationPayloadData(generation_params, forgeInternalTaskId, isWindowsServer);
+        const generationDataArray = constructGenerationPayloadData(generation_params, forgeInternalTaskId, false);
         
         // Create the generation payload for the Gradio API
         const generationPayload = {

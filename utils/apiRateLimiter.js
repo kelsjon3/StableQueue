@@ -68,19 +68,8 @@ function createRateLimiter(options = {}) {
             
             res.status(options.statusCode).json(options.message);
         },
-        // Called when a request is received
-        onLimitReached: (req, res, options) => {
-            const apiKeyId = req.apiKeyId || 'anonymous';
-            
-            apiLogger.logApiError('Rate limit reached', {
-                request: apiLogger.getSafeRequestInfo(req),
-                rate_limit: {
-                    apiKeyId,
-                    windowMs: options.windowMs,
-                    max: options.max
-                }
-            });
-        }
+        // Note: onLimitReached was removed in express-rate-limit v7
+        // Rate limit logging is now handled in the handler function above
     };
     
     const limiterOptions = { ...defaultOptions, ...options };

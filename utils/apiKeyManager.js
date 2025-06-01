@@ -240,8 +240,27 @@ function deleteApiKey(id) {
  */
 function createApiKeyAuthMiddleware() {
     return function apiKeyAuth(req, res, next) {
-        const apiKey = req.headers['x-api-key'];
-        const apiSecret = req.headers['x-api-secret'];
+        let apiKey, apiSecret;
+        
+        // Support both header formats for backward compatibility
+        // 1. X-API-Key and X-API-Secret (original format)
+        // 2. Authorization: Bearer format (key:secret base64 encoded)
+        if (req.headers['x-api-key'] && req.headers['x-api-secret']) {
+            apiKey = req.headers['x-api-key'];
+            apiSecret = req.headers['x-api-secret'];
+        } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+            const token = req.headers.authorization.substring(7);
+            try {
+                const decoded = Buffer.from(token, 'base64').toString('utf-8');
+                const [key, secret] = decoded.split(':');
+                if (key && secret) {
+                    apiKey = key;
+                    apiSecret = secret;
+                }
+            } catch (error) {
+                // Invalid base64 or format, will be handled below
+            }
+        }
         
         // Log the authentication attempt with safe request information
         const requestInfo = apiLogger.getSafeRequestInfo(req);
@@ -255,7 +274,7 @@ function createApiKeyAuthMiddleware() {
             
             return res.status(401).json({ 
                 error: 'API key and secret are required',
-                message: 'Authentication failed: API key and secret must be provided in the X-API-Key and X-API-Secret headers'
+                message: 'Authentication failed: API key and secret must be provided in X-API-Key/X-API-Secret headers or Authorization: Bearer header'
             });
         }
         

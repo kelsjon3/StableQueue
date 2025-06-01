@@ -22,7 +22,6 @@ class ApiKeyManagerUI {
         this.editKeyIdInput = document.getElementById('edit-key-id');
         this.apiKeyNameInput = document.getElementById('api-key-name');
         this.apiKeyDescriptionInput = document.getElementById('api-key-description');
-        this.apiKeyTierSelect = document.getElementById('api-key-tier');
         this.apiKeyActiveCheckbox = document.getElementById('api-key-active');
         this.apiKeyActiveGroup = document.getElementById('api-key-active-group');
         this.saveApiKeyBtn = document.getElementById('save-api-key-btn');
@@ -34,7 +33,6 @@ class ApiKeyManagerUI {
         this.copyApiKeyBtn = document.getElementById('copy-api-key-btn');
         this.newApiKeyId = document.getElementById('new-api-key-id');
         this.newApiKeyName = document.getElementById('new-api-key-name');
-        this.newApiKeyTier = document.getElementById('new-api-key-tier');
         this.newApiKeyCreated = document.getElementById('new-api-key-created');
         this.doneApiKeyBtn = document.getElementById('done-api-key-btn');
         
@@ -101,13 +99,15 @@ class ApiKeyManagerUI {
         if (this.apiKeysTable) this.apiKeysTable.style.display = 'none';
         
         try {
-            const response = await fetch('/api/v1/apikeys');
+            // Fetch API keys
+            const response = await fetch('/api/v1/api-keys');
             
             if (!response.ok) {
                 throw new Error(`Failed to fetch API keys: ${response.status} ${response.statusText}`);
             }
             
-            const apiKeys = await response.json();
+            const result = await response.json();
+            const apiKeys = result.api_keys || [];
             
             // Clear existing rows
             this.apiKeysRows.innerHTML = '';
@@ -129,7 +129,7 @@ class ApiKeyManagerUI {
         } catch (error) {
             console.error('Error fetching API keys:', error);
             // Show error state (could be improved with a dedicated error message element)
-            this.apiKeysRows.innerHTML = `<tr><td colspan="6" class="error-message">Failed to load API keys: ${error.message}</td></tr>`;
+            this.apiKeysRows.innerHTML = `<tr><td colspan="5" class="error-message">Failed to load API keys: ${error.message}</td></tr>`;
             if (this.apiKeysTable) this.apiKeysTable.style.display = 'table';
         } finally {
             // Hide loading
@@ -148,11 +148,6 @@ class ApiKeyManagerUI {
         const createdDate = new Date(key.created_at);
         const formattedDate = createdDate.toLocaleString();
         
-        // Tier display with rate limit info
-        const tierDisplay = key.tier === 'premium' ? 
-            'Premium (300 req/min)' : 
-            'Standard (60 req/min)';
-        
         // Status badge with color
         const statusBadge = key.is_active ? 
             `<span class="status-badge status-active">Active</span>` : 
@@ -161,7 +156,6 @@ class ApiKeyManagerUI {
         row.innerHTML = `
             <td class="api-key-name">${key.name}</td>
             <td class="api-key-description">${key.description || '—'}</td>
-            <td class="api-key-tier">${tierDisplay}</td>
             <td class="api-key-created">${formattedDate}</td>
             <td class="api-key-status">${statusBadge}</td>
             <td class="api-key-actions">
@@ -213,18 +207,18 @@ class ApiKeyManagerUI {
     async showEditKeyForm(keyId) {
         try {
             // Fetch the API key details
-            const response = await fetch(`/api/v1/apikeys/${keyId}`);
+            const response = await fetch(`/api/v1/api-keys/${keyId}`);
             
             if (!response.ok) {
                 throw new Error(`Failed to fetch API key: ${response.status} ${response.statusText}`);
             }
             
-            const key = await response.json();
+            const responseData = await response.json();
+            const key = responseData.api_key || responseData;
             
             // Populate form
             this.apiKeyNameInput.value = key.name;
             this.apiKeyDescriptionInput.value = key.description || '';
-            this.apiKeyTierSelect.value = key.tier || 'standard';
             this.apiKeyActiveCheckbox.checked = key.is_active;
             this.editKeyIdInput.value = key.id;
             
@@ -260,7 +254,6 @@ class ApiKeyManagerUI {
         const keyId = this.editKeyIdInput.value.trim();
         const name = this.apiKeyNameInput.value.trim();
         const description = this.apiKeyDescriptionInput.value.trim();
-        const tier = this.apiKeyTierSelect.value;
         const isActive = this.apiKeyActiveCheckbox.checked;
         
         // Validate name
@@ -272,8 +265,7 @@ class ApiKeyManagerUI {
         // Create request data
         const keyData = {
             name,
-            description,
-            tier
+            description
         };
         
         // Add is_active only for updates
@@ -287,7 +279,7 @@ class ApiKeyManagerUI {
             
             if (keyId) {
                 // Update existing key
-                response = await fetch(`/api/v1/apikeys/${keyId}`, {
+                response = await fetch(`/api/v1/api-keys/${keyId}`, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json'
@@ -306,10 +298,10 @@ class ApiKeyManagerUI {
                 this.fetchAndDisplayApiKeys();
                 
                 // Show success message
-                alert(`API key "${result.name}" updated successfully.`);
+                alert(`API key "${result.name || result.api_key?.name}" updated successfully.`);
             } else {
-                // Create new key
-                response = await fetch('/api/v1/apikeys', {
+                // Create new API key
+                response = await fetch('/api/v1/api-keys', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -328,7 +320,7 @@ class ApiKeyManagerUI {
                 this.fetchAndDisplayApiKeys();
                 
                 // Show result view with the new key
-                this.showKeyResult(result);
+                this.showKeyResult(result.api_key || result);
             }
         } catch (error) {
             console.error('Error submitting API key form:', error);
@@ -342,7 +334,6 @@ class ApiKeyManagerUI {
         this.newApiKeyInput.value = keyData.key;
         this.newApiKeyId.textContent = keyData.id;
         this.newApiKeyName.textContent = keyData.name;
-        this.newApiKeyTier.textContent = keyData.tier === 'premium' ? 'Premium' : 'Standard';
         
         // Format created date
         const createdDate = new Date(keyData.created_at);
@@ -384,13 +375,14 @@ class ApiKeyManagerUI {
     async showKeyDetails(keyId) {
         try {
             // Fetch the API key details
-            const response = await fetch(`/api/v1/apikeys/${keyId}`);
+            const response = await fetch(`/api/v1/api-keys/${keyId}`);
             
             if (!response.ok) {
                 throw new Error(`Failed to fetch API key: ${response.status} ${response.statusText}`);
             }
             
-            const key = await response.json();
+            const responseData = await response.json();
+            const key = responseData.api_key || responseData;
             this.currentApiKey = key;
             
             // Format created date
@@ -420,7 +412,6 @@ class ApiKeyManagerUI {
                     <p><strong>ID:</strong> ${key.id}</p>
                     <p><strong>Name:</strong> ${key.name}</p>
                     <p><strong>Description:</strong> ${key.description || '—'}</p>
-                    <p><strong>Tier:</strong> ${key.tier === 'premium' ? 'Premium (300 req/min)' : 'Standard (60 req/min)'}</p>
                     <p><strong>Status:</strong> ${key.is_active ? 'Active' : 'Inactive'}</p>
                     <p><strong>Created:</strong> ${formattedDate}</p>
                     ${lastUsedHtml}
@@ -468,13 +459,14 @@ class ApiKeyManagerUI {
     async confirmDeleteKey(keyId) {
         try {
             // Fetch the API key details first to show the name in the confirmation
-            const response = await fetch(`/api/v1/apikeys/${keyId}`);
+            const response = await fetch(`/api/v1/api-keys/${keyId}`);
             
             if (!response.ok) {
                 throw new Error(`Failed to fetch API key: ${response.status} ${response.statusText}`);
             }
             
-            const key = await response.json();
+            const responseData = await response.json();
+            const key = responseData.api_key || responseData;
             
             const confirmDelete = confirm(`Are you sure you want to delete the API key "${key.name}"? This action cannot be undone.`);
             
@@ -496,7 +488,7 @@ class ApiKeyManagerUI {
     // Delete an API key by ID
     async deleteKey(keyId) {
         try {
-            const response = await fetch(`/api/v1/apikeys/${keyId}`, {
+            const response = await fetch(`/api/v1/api-keys/${keyId}`, {
                 method: 'DELETE'
             });
             

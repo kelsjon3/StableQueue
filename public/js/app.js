@@ -5,8 +5,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const serverApiUrlInput = document.getElementById('server-api-url');
     const serverAuthUserInput = document.getElementById('server-auth-user');
     const serverAuthPassInput = document.getElementById('server-auth-pass');
-    const serverModelRootPathInput = document.getElementById('server-model-root-path');
-    const browseModelPathBtn = document.getElementById('browse-model-path-btn');
     const editAliasInput = document.getElementById('edit-alias'); // Hidden field for editing
     const saveServerBtn = document.getElementById('save-server-btn');
     const cancelEditBtn = document.getElementById('cancel-edit-btn');
@@ -49,6 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const queueView = document.getElementById('queue-view');
     const galleryView = document.getElementById('gallery-view');
     const serverSetupView = document.getElementById('server-setup-view');
+    
+    // Server list element
+    const serverListUL = document.getElementById('server-list');
 
     let allServersCache = []; // Cache for server data to assist with editing
     let currentJobId = null; // Track the current job ID for the progress display
@@ -313,8 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     listItem.innerHTML = `
                         <strong>Alias:</strong> ${server.alias}<br>
                         <strong>URL:</strong> ${server.apiUrl}<br>
-                        <strong>Auth:</strong> ${server.authUser ? 'Username/Password' : 'None'}<br>
-                        <strong>Model Root:</strong> ${server.modelRootPath || '<not set>'}
+                        <strong>Auth:</strong> ${server.authUser ? 'Username/Password' : 'None'}
                         <div class="server-actions">
                             <button class="edit-server-btn" data-alias="${server.alias}">Edit</button>
                             <button class="delete-server-btn" data-alias="${server.alias}">Delete</button>
@@ -351,7 +351,6 @@ document.addEventListener('DOMContentLoaded', () => {
         serverApiUrlInput.value = serverToEdit.apiUrl;
         serverAuthUserInput.value = serverToEdit.authUser || '';
         serverAuthPassInput.value = serverToEdit.authPass || '';
-        serverModelRootPathInput.value = serverToEdit.modelRootPath || '';
         editAliasInput.value = serverToEdit.alias; // Set the original alias for update reference
 
         saveServerBtn.textContent = 'Update Server';
@@ -408,7 +407,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const apiUrl = serverApiUrlInput.value.trim();
             const authUser = serverAuthUserInput.value.trim();
             const authPass = serverAuthPassInput.value.trim();
-            const modelRootPath = serverModelRootPathInput.value.trim();
             const originalAliasForUpdate = editAliasInput.value; // Original alias if in edit mode
 
             if (!alias || !apiUrl) {
@@ -421,7 +419,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 apiUrl,
                 ...(authUser && { authUser }),
                 ...(authPass && { authPass }),
-                modelRootPath,
             };
 
             let method = 'POST';
@@ -454,18 +451,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error(`Error ${originalAliasForUpdate ? 'updating' : 'saving'} server:`, error);
                 alert(`Error ${originalAliasForUpdate ? 'updating' : 'saving'} server: ${error.message}`);
             }
-        });
-    }
-
-    // Handle model root path browse button
-    if (browseModelPathBtn) {
-        browseModelPathBtn.addEventListener('click', () => {
-            // We can't actually open a native file browser without a server-side component
-            // Instead, show a dialog with instructions
-            alert('Enter the full path to your models folder, for example:\n\n' +
-                'On Windows: C:\\models or D:\\stable-diffusion\\models\n' +
-                'On Linux: /home/user/models or /mnt/user/models\n\n' +
-                'This should be the folder that contains subdirectories like "Stable-diffusion", "Lora", etc.');
         });
     }
 
@@ -515,4 +500,30 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeJobClient();
     // Start on queue view by default
     showView(queueView, navQueue);
+    
+    // Missing functions that are referenced but not defined
+    async function fetchAndDisplayJobs() {
+        // This function would load jobs for the queue view
+        console.log('fetchAndDisplayJobs called - using WebSocket instead');
+    }
+    
+    async function fetchAndDisplayImages() {
+        // This function would load images for the gallery view
+        console.log('fetchAndDisplayImages called - gallery functionality not implemented yet');
+    }
+    
+    async function fetchAndPopulateServers() {
+        // This function would populate server dropdowns
+        console.log('fetchAndPopulateServers called - no dropdown to populate');
+    }
+    
+    function displayQueueJobs(jobs) {
+        // This function would display jobs in the queue table
+        console.log('displayQueueJobs called with', jobs.length, 'jobs');
+    }
+    
+    function logJobStatus(job) {
+        // This function would log job status
+        console.log('Job status:', job.mobilesd_job_id, job.status);
+    }
 });

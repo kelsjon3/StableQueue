@@ -29,6 +29,15 @@ Implemented a consistent error handling system:
 - Detailed context for debugging
 - Consistent response structure for all errors
 
+### 1.4 CORS Support
+
+Added comprehensive CORS (Cross-Origin Resource Sharing) support:
+
+- Middleware to handle cross-origin requests from Forge extensions
+- Support for localhost ports (7860, 8080, 3000)
+- Proper handling of preflight OPTIONS requests
+- Allows secure communication between Forge UI and StableQueue backend
+
 ## 2. API Authentication System
 
 ### 2.1 API Key Infrastructure
@@ -37,18 +46,33 @@ Implemented a complete API key authentication system:
 
 - Secure random string generation for API keys
 - API key validation middleware
-- Tiered rate limiting (standard: 60 req/min, premium: 300 req/min)
+- Rate limiting (standardized at 60 req/min for all keys)
 - Usage tracking and logging
 
 ### 2.2 API Key Management Endpoints
 
 Created comprehensive endpoints for API key management:
 
-- **Create**: `/api/v1/apikeys` (POST)
-- **List**: `/api/v1/apikeys` (GET)
-- **Get Details**: `/api/v1/apikeys/:id` (GET)
-- **Update**: `/api/v1/apikeys/:id` (PUT)
-- **Delete**: `/api/v1/apikeys/:id` (DELETE)
+- **Create**: `/api/v1/api-keys` (POST) - No authentication required from web UI
+- **List**: `/api/v1/api-keys` (GET) - No authentication required from web UI
+- **Get Details**: `/api/v1/api-keys/:id` (GET) - No authentication required from web UI
+- **Update**: `/api/v1/api-keys/:id` (PUT) - No authentication required from web UI
+- **Delete**: `/api/v1/api-keys/:id` (DELETE) - No authentication required from web UI
+
+### 2.3 First-Time Setup Endpoints
+
+Special endpoints for initial API key creation:
+
+- **Setup Check**: `/api/v1/api-keys/setup` (GET) - Check if any API keys exist
+- **Setup Create**: `/api/v1/api-keys/setup` (POST) - Create first API key without authentication
+
+### 2.4 Authentication Model
+
+**Important**: The authentication model distinguishes between:
+
+- **Web UI Access**: Management interface has administrative access without API key authentication
+- **External API Access**: Extensions and external applications must use API keys for authentication
+- **Security**: Web UI should be secured at network/application level, not through API keys
 
 ## 3. Database Enhancements
 
@@ -59,6 +83,7 @@ Added new fields to the database schema:
 - Added `app_type`, `source_info`, and `api_key_id` to jobs table
 - Created new `api_keys` table with comprehensive fields
 - Added tracking fields for usage statistics
+- Removed tier-related fields (simplified to single rate limit)
 
 ### 3.2 Migration Support
 
@@ -105,6 +130,7 @@ Implemented a complete user interface for API key management:
 - List view with filtering and sorting
 - Create, edit, view, and delete functionality
 - Copy to clipboard for new keys
+- First-time setup flow for initial API key creation
 
 ### 5.2 Security Features
 
@@ -114,10 +140,30 @@ Added security features to protect API keys:
 - Confirmation for key deletion
 - Ability to deactivate keys without deletion
 - Secure handling of key data
+- Administrative access model (no API key required for web UI)
 
-## 6. Documentation
+## 6. Server Configuration Improvements
 
-### 6.1 API Documentation
+### 6.1 Removed Model Root Path
+
+Simplified server configuration by removing the "Model Root Path" functionality:
+
+- Removed from server setup UI
+- Eliminated Windows/Linux path detection logic
+- Simplified gradio job dispatcher to use forward slashes consistently
+- Updated server management endpoints
+
+### 6.2 Streamlined Configuration
+
+Server setup now focuses on essential configuration:
+
+- Server alias and URL
+- Authentication credentials
+- Simplified path handling
+
+## 7. Documentation
+
+### 7.1 API Documentation
 
 Created detailed documentation for extension developers:
 
@@ -127,7 +173,7 @@ Created detailed documentation for extension developers:
 - Error code explanations
 - Example requests and responses
 
-### 6.2 Implementation Documentation
+### 7.2 Implementation Documentation
 
 Created internal documentation for development and maintenance:
 
@@ -136,7 +182,51 @@ Created internal documentation for development and maintenance:
 - Security considerations
 - Postman collection usage guide
 
-## 7. Next Steps
+## 8. Recent Fixes and Improvements
+
+### 8.1 API Endpoint Consistency
+
+Fixed API endpoint URL inconsistencies:
+
+- Standardized on `/api/v1/api-keys/` format (with dash)
+- Updated frontend to use consistent endpoint URLs
+- Ensured proper routing throughout the application
+
+### 8.2 Authentication Flow
+
+Corrected authentication flow for proper operation:
+
+- Web UI operates without API key authentication
+- External applications authenticate with generated API keys
+- Clear separation of concerns between administrative and programmatic access
+
+### 8.3 Error Handling
+
+Improved error handling and user experience:
+
+- Better error messages for authentication issues
+- Proper handling of first-time setup scenarios
+- Graceful fallbacks for various edge cases
+
+## 9. Removed Features
+
+### 9.1 Tier System
+
+The API key tier system has been removed:
+
+- No longer supports premium/standard tiers
+- Simplified rate limiting to single configuration
+- Reduced complexity in API key creation and management
+
+### 9.2 Model Root Path
+
+Removed model root path configuration:
+
+- Eliminated from server setup process
+- Simplified path handling logic
+- Reduced platform-specific complexity
+
+## 10. Next Steps
 
 With the API standardization, testing, and management work completed, the next steps are:
 
@@ -146,32 +236,34 @@ With the API standardization, testing, and management work completed, the next s
 4. Implement job monitoring within the extension
 5. Add progress indication for extension-submitted jobs
 
-## 8. Files and Components
+## 11. Files and Components
 
-### 8.1 API Implementation
+### 11.1 API Implementation
 
 - `routes/v2Generation.js` - v2 API endpoint implementation
+- `routes/apiKeys.js` - API key management endpoints (updated)
 - `utils/apiErrorHandler.js` - Standardized error handling
 - `utils/apiKeyManager.js` - API key management utilities
 - `utils/apiConstants.js` - API-related constants and configurations
 - `middleware/apiAuth.js` - API authentication middleware
+- `middleware/apiMiddleware.js` - CORS and other API middleware
 
-### 8.2 Testing Components
+### 11.2 Testing Components
 
 - `tests/apiEndpoints.test.js` - Automated API tests
 - `scripts/manualApiTests.js` - Manual testing script
 - `scripts/runApiTests.js` - Test runner
 - `docs/postman/stablequeue_api_collection.json` - Postman collection
 
-### 8.3 UI Components
+### 11.3 UI Components
 
-- `public/js/apiKeyManager.js` - API key management UI logic
+- `public/js/apiKeyManager.js` - API key management UI logic (updated)
 - `public/index.html` - Updated with API key management UI
 - `public/js/app.js` - Navigation integration
 
-### 8.4 Documentation
+### 11.4 Documentation
 
 - `docs/EXTENSION_API.md` - API documentation for extension developers
 - `docs/API_TESTING_SUMMARY.md` - Testing approach and coverage
-- `docs/API_KEY_UI_SUMMARY.md` - UI implementation details
-- `docs/API_IMPLEMENTATION_SUMMARY.md` - This comprehensive summary 
+- `docs/API_KEY_UI_SUMMARY.md` - UI implementation details (updated)
+- `docs/API_IMPLEMENTATION_SUMMARY.md` - This comprehensive summary (updated) 
