@@ -71,7 +71,11 @@ router.post('/', corsMiddleware, (req, res) => {
         const newApiKey = apiKeyManager.createApiKey(name.trim(), permissions, 'default', custom_rate_limits);
         
         // Log the creation
-        apiLogger.logApiKeyCreation(newApiKey, requestInfo);
+        apiLogger.logApiAccess('API key created successfully', {
+            request: requestInfo,
+            key_id: newApiKey.id,
+            key_name: newApiKey.name
+        });
         
         res.status(201).json({
             success: true,
@@ -168,7 +172,11 @@ router.put('/:id', corsMiddleware, (req, res) => {
         const updatedKey = apiKeyManager.updateApiKey(keyId, updateData);
         
         // Log the update
-        apiLogger.logApiKeyUpdate(updatedKey, apiLogger.getSafeRequestInfo(req));
+        apiLogger.logApiAccess('API key updated successfully', {
+            request: apiLogger.getSafeRequestInfo(req),
+            key_id: updatedKey.id,
+            key_name: updatedKey.name
+        });
         
         res.status(200).json({
             success: true,
@@ -217,7 +225,11 @@ router.delete('/:id', corsMiddleware, (req, res) => {
         apiKeyManager.deleteApiKey(keyId);
         
         // Log the deletion
-        apiLogger.logApiKeyDeletion(existingKey, apiLogger.getSafeRequestInfo(req));
+        apiLogger.logApiAccess('API key deleted successfully', {
+            request: apiLogger.getSafeRequestInfo(req),
+            key_id: existingKey.id,
+            key_name: existingKey.name
+        });
         
         res.status(200).json({
             success: true,

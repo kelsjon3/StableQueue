@@ -507,6 +507,22 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('fetchAndDisplayJobs called - using WebSocket instead');
     }
     
+    async function loadQueueJobs() {
+        // Force a refresh of queue jobs by making an API call
+        try {
+            const response = await fetch('/api/v1/queue/jobs');
+            if (response.ok) {
+                const data = await response.json();
+                const jobs = data.jobs || [];
+                displayQueueJobs(jobs);
+            } else {
+                console.error('Failed to load queue jobs:', response.status);
+            }
+        } catch (error) {
+            console.error('Error loading queue jobs:', error);
+        }
+    }
+    
     async function fetchAndDisplayImages() {
         // This function would load images for the gallery view
         console.log('fetchAndDisplayImages called - gallery functionality not implemented yet');
@@ -518,8 +534,88 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function displayQueueJobs(jobs) {
-        // This function would display jobs in the queue table
         console.log('displayQueueJobs called with', jobs.length, 'jobs');
+        
+        const tbody = document.getElementById('queue-jobs');
+        const loading = document.getElementById('queue-loading');
+        const empty = document.getElementById('queue-empty');
+        
+        if (!tbody) {
+            console.error('Queue jobs tbody not found');
+            return;
+        }
+        
+        // Hide loading indicator
+        if (loading) loading.style.display = 'none';
+        
+        // Clear existing rows
+        tbody.innerHTML = '';
+        
+        if (jobs.length === 0) {
+            if (empty) empty.style.display = 'block';
+            return;
+        }
+        
+        if (empty) empty.style.display = 'none';
+        
+        // Create rows for each job
+        jobs.forEach(job => {
+            const row = document.createElement('tr');
+            row.id = `job-row-${job.mobilesd_job_id}`;
+            row.style.cursor = 'pointer';
+            
+            // Format creation timestamp
+            const createdDate = new Date(job.creation_timestamp).toLocaleString();
+            
+            // Create status badge with progress if processing
+            let statusHtml = `<span class="job-status job-status-${job.status.toLowerCase()}">${job.status}</span>`;
+            
+            if (job.status === 'processing') {
+                const progressPercentage = job.result_details?.progress_percentage || 0;
+                statusHtml += `
+                    <div class="job-progress-container">
+                        <div class="job-progress-bar">
+                            <div class="job-progress-bar-fill" style="width: ${progressPercentage}%"></div>
+                        </div>
+                        <div class="job-progress-text">${progressPercentage.toFixed(1)}%</div>
+                    </div>
+                `;
+                
+                // Add preview image if available
+                if (job.result_details && job.result_details.preview_image) {
+                    statusHtml += `
+                        <div style="margin-top: 0.5rem;">
+                            <img src="/outputs/${job.result_details.preview_image}?t=${Date.now()}" 
+                                 alt="Preview" 
+                                 class="job-preview-image"
+                                 loading="lazy">
+                        </div>
+                    `;
+                }
+            }
+            
+            row.innerHTML = `
+                <td class="job-id">${job.mobilesd_job_id}</td>
+                <td>${statusHtml}</td>
+                <td>${job.target_server_alias || 'Unknown'}</td>
+                <td>${createdDate}</td>
+                <td>
+                    <div class="queue-job-actions">
+                        <button class="secondary-button view-details-btn" data-job-id="${job.mobilesd_job_id}">Details</button>
+                        ${job.status === 'pending' || job.status === 'processing' ? 
+                            `<button class="danger-button cancel-job-btn" data-job-id="${job.mobilesd_job_id}">Cancel</button>` : 
+                            ''}
+                        ${job.status === 'completed' || job.status === 'failed' ? 
+                            `<button class="danger-button delete-job-btn" data-job-id="${job.mobilesd_job_id}">Delete</button>` : 
+                            ''}
+                    </div>
+                </td>
+            `;
+            
+            tbody.appendChild(row);
+        });
+        
+        console.log(`Added ${jobs.length} job rows to queue table`);
     }
     
     function logJobStatus(job) {
