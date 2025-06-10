@@ -281,20 +281,6 @@ function createApiKeyAuthMiddleware() {
         // Validate against database
         const keyRecord = validateApiKey(apiKey, apiSecret);
         if (!keyRecord) {
-            // Debug: Show what keys are actually in the database
-            console.log(`[Auth Debug] Failed authentication for key: ${apiKey}`);
-            console.log(`[Auth Debug] Checking available API keys in database...`);
-            
-            try {
-                const allKeys = getAllApiKeys();
-                console.log(`[Auth Debug] Found ${allKeys.length} keys in database:`);
-                allKeys.forEach(key => {
-                    console.log(`[Auth Debug] - Key: ${key.key}, Name: ${key.name}, Active: ${key.is_active}`);
-                });
-            } catch (error) {
-                console.log(`[Auth Debug] Error reading API keys: ${error.message}`);
-            }
-            
             // Log failed authentication due to invalid credentials
             apiLogger.logApiAuth('Authentication failed: Invalid API credentials', {
                 reason: 'invalid_credentials',
