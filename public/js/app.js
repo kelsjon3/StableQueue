@@ -27,7 +27,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const queueEmpty = document.getElementById('queue-empty');
     const refreshQueueBtn = document.getElementById('refresh-queue-btn');
     const queueStatusFilter = document.getElementById('queue-status-filter');
-    const jobDetailsModal = document.getElementById('job-details-modal');
+    const jobDetailsModal = document.getElementById('job-details-modal');Research how to programmatically capture complete image generation parameters from within a Stable Diffusion Forge WebUI extension built on Gradio framework
+    I'm developing a Forge WebUI extension that needs to capture ALL generation parameters (including extension data like ControlNet, IP-Adapter, Regional Prompts) and send them to a remote queue system without triggering local generation.
+    Technical Architecture:
+    Stable Diffusion Forge WebUI - A1111 fork with enhanced features
+    Gradio framework - The entire WebUI is built on Gradio (gr.Textbox, gr.Slider, gr.Dropdown, etc.)
+    Forge extension system - Python backend + JavaScript frontend
+    Extensions ecosystem - ControlNet, IP-Adapter, Regional Prompts, Forge Couple, etc.
+    FastAPI integration - Forge exposes /sdapi/v1/ endpoints when --api flag is used
+    Core Challenge:
+    Need to programmatically extract the complete parameter set that Forge would use for generation, including:
+    Basic parameters (prompt, steps, CFG, sampler, etc.)
+    All active extension configurations and their current UI states
+    Model selections, LoRA settings, and other advanced options
+    Research Focus:
+    Gradio component state access - How to read values from gr.Textbox, gr.Slider, gr.Dropdown components programmatically
+    Gradio Blocks traversal - Navigating nested Gradio layouts (tabs, accordions, extension panels)
+    Forge extension hooks - APIs for accessing extension states (ControlNet models, IP-Adapter settings)
+    Gradio event interception - Capturing UI state without triggering generation
+    Extension parameter serialization - How extensions store and expose their configurations
+    Forge internal APIs - Accessing current model, sampler, and other global settings
+    Goal: Capture the exact same parameter set that Forge uses internally when the Generate button is clicked, but without triggering actual generation.
+    This covers all the key technical details and should give much more targeted research results!
     const jobDetailsContent = document.getElementById('job-details-content');
     const cancelJobBtn = document.getElementById('cancel-job-btn');
     const deleteJobBtn = document.getElementById('delete-job-btn');
@@ -602,6 +623,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>
                     <div class="queue-job-actions">
                         <button class="secondary-button view-details-btn" data-job-id="${job.mobilesd_job_id}">Details</button>
+                        <button class="secondary-button view-params-btn" data-job-id="${job.mobilesd_job_id}">Generation Parameters</button>
                         ${job.status === 'pending' || job.status === 'processing' ? 
                             `<button class="danger-button cancel-job-btn" data-job-id="${job.mobilesd_job_id}">Cancel</button>` : 
                             ''}
@@ -616,10 +638,255 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         
         console.log(`Added ${jobs.length} job rows to queue table`);
+        
+        // Add event listeners for the new Generation Parameters buttons
+        document.querySelectorAll('.view-params-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const jobId = btn.getAttribute('data-job-id');
+                showJobParameters(jobId);
+            });
+        });
+    }
+    
+    async function showJobParameters(jobId) {
+        try {
+            // Fetch job details to get the generation parameters
+            const response = await fetch(`/api/v1/queue/jobs/${jobId}/status`);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch job details: ${response.status}`);
+            }
+            
+            const jobData = await response.json();
+            // The API returns job data directly, not wrapped in a "job" property
+            const job = jobData;
+            
+            // Get the modal elements
+            const modal = document.getElementById('job-params-modal');
+            const content = document.getElementById('job-params-content');
+            
+            if (!modal || !content) {
+                console.error('Job parameters modal elements not found');
+                return;
+            }
+            
+            // Parse generation parameters
+            let generationParams = {};
+            try {
+                if (typeof job.generation_params === 'string') {
+                    generationParams = JSON.parse(job.generation_params);
+                } else if (typeof job.generation_params === 'object') {
+                    generationParams = job.generation_params;
+                }
+            } catch (e) {
+                console.error('Error parsing generation parameters:', e);
+                generationParams = { error: 'Failed to parse generation parameters', raw: job.generation_params };
+            }
+            
+            // Format the parameters for display
+            const formattedParams = formatGenerationParameters(generationParams);
+            
+            // Display in modal
+            content.innerHTML = `
+                <div class="job-params-display">
+                    <div class="job-params-header">
+                        <h4>Job ID: ${job.mobilesd_job_id}</h4>
+                        <p><strong>Server:</strong> ${job.target_server_alias || 'Unknown'}</p>
+                        <p><strong>Status:</strong> ${job.status}</p>
+                        <p><strong>App Type:</strong> ${job.app_type || 'forge'}</p>
+                        <p><strong>Source:</strong> ${job.source_info || 'unknown'}</p>
+                    </div>
+                    <div class="job-params-body">
+                        <h4>Generation Parameters:</h4>
+                        ${formattedParams}
+                    </div>
+                    <div class="job-params-raw">
+                        <details>
+                            <summary>Raw JSON Data</summary>
+                            <pre id="raw-params-json">${JSON.stringify(generationParams, null, 2)}</pre>
+                        </details>
+                    </div>
+                </div>
+            `;
+            
+            // Show the modal
+            modal.style.display = 'block';
+            
+            // Store current params for copy/download functionality
+            window.currentJobParams = {
+                jobId: job.mobilesd_job_id,
+                parameters: generationParams
+            };
+            
+        } catch (error) {
+            console.error('Error showing job parameters:', error);
+            
+            // More detailed error information for debugging
+            let errorMessage = `Error loading job parameters: ${error.message}`;
+            
+            // If it's a fetch error, try to provide more context
+            if (error.message.includes('Failed to fetch job details')) {
+                errorMessage += '\n\nThis could be due to:\n- Job ID not found\n- Network connectivity issues\n- Server is not responding';
+            }
+            
+            alert(errorMessage);
+        }
+    }
+    
+    function formatGenerationParameters(params) {
+        if (!params || typeof params !== 'object') {
+            return '<p>No parameters available</p>';
+        }
+        
+        const sections = {
+            'Basic Settings': ['prompt', 'negative_prompt', 'width', 'height', 'steps', 'cfg_scale'],
+            'Sampling': ['sampler_name', 'scheduler', 'seed', 'subseed', 'subseed_strength'],
+            'Batch Settings': ['batch_size', 'n_iter', 'batch_count'],
+            'Advanced': ['restore_faces', 'tiling', 'enable_hr', 'hr_scale', 'hr_upscaler', 'hr_second_pass_steps', 'denoising_strength'],
+            'Model & Extensions': ['checkpoint_name', 'sd_model_checkpoint', 'styles', 'script_name', 'script_args'],
+            'Override Settings': ['override_settings']
+        };
+        
+        let html = '';
+        
+        // Display organized sections
+        for (const [sectionName, keys] of Object.entries(sections)) {
+            const sectionParams = {};
+            let hasContent = false;
+            
+            keys.forEach(key => {
+                if (params.hasOwnProperty(key) && params[key] !== null && params[key] !== undefined && params[key] !== '') {
+                    sectionParams[key] = params[key];
+                    hasContent = true;
+                }
+            });
+            
+            if (hasContent) {
+                html += `<div class="param-section">`;
+                html += `<h5>${sectionName}</h5>`;
+                html += `<table class="params-table">`;
+                
+                for (const [key, value] of Object.entries(sectionParams)) {
+                    const displayValue = formatParameterValue(key, value);
+                    html += `<tr><td class="param-name">${key}</td><td class="param-value">${displayValue}</td></tr>`;
+                }
+                
+                html += `</table></div>`;
+            }
+        }
+        
+        // Display any remaining parameters not in the organized sections
+        const usedKeys = Object.values(sections).flat();
+        const remainingParams = Object.keys(params).filter(key => !usedKeys.includes(key));
+        
+        if (remainingParams.length > 0) {
+            html += `<div class="param-section">`;
+            html += `<h5>Other Parameters</h5>`;
+            html += `<table class="params-table">`;
+            
+            remainingParams.forEach(key => {
+                if (params[key] !== null && params[key] !== undefined && params[key] !== '') {
+                    const displayValue = formatParameterValue(key, params[key]);
+                    html += `<tr><td class="param-name">${key}</td><td class="param-value">${displayValue}</td></tr>`;
+                }
+            });
+            
+            html += `</table></div>`;
+        }
+        
+        return html || '<p>No valid parameters found</p>';
+    }
+    
+    function formatParameterValue(key, value) {
+        // Handle different types of parameter values
+        if (value === null || value === undefined) {
+            return '<span class="param-null">null</span>';
+        }
+        
+        if (typeof value === 'boolean') {
+            return `<span class="param-boolean">${value}</span>`;
+        }
+        
+        if (typeof value === 'number') {
+            return `<span class="param-number">${value}</span>`;
+        }
+        
+        if (typeof value === 'string') {
+            if (value.length > 100) {
+                return `<div class="param-text-long">${escapeHtml(value)}</div>`;
+            }
+            return `<span class="param-text">${escapeHtml(value)}</span>`;
+        }
+        
+        if (Array.isArray(value)) {
+            if (value.length === 0) {
+                return '<span class="param-array-empty">[]</span>';
+            }
+            return `<div class="param-array"><pre>${JSON.stringify(value, null, 2)}</pre></div>`;
+        }
+        
+        if (typeof value === 'object') {
+            return `<div class="param-object"><pre>${JSON.stringify(value, null, 2)}</pre></div>`;
+        }
+        
+        return escapeHtml(String(value));
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
     
     function logJobStatus(job) {
         // This function would log job status
         console.log('Job status:', job.mobilesd_job_id, job.status);
     }
+    
+    // Add event listeners for modal close buttons and copy/download functionality
+    document.addEventListener('click', (e) => {
+        // Close modals when clicking the close button or outside
+        if (e.target.classList.contains('close-modal')) {
+            e.target.closest('.modal').style.display = 'none';
+        }
+        
+        // Handle copy parameters button
+        if (e.target.id === 'copy-params-btn') {
+            if (window.currentJobParams) {
+                navigator.clipboard.writeText(JSON.stringify(window.currentJobParams.parameters, null, 2))
+                    .then(() => alert('Parameters copied to clipboard!'))
+                    .catch(err => {
+                        console.error('Failed to copy:', err);
+                        alert('Failed to copy parameters to clipboard');
+                    });
+            }
+        }
+        
+        // Handle download parameters button
+        if (e.target.id === 'download-params-btn') {
+            if (window.currentJobParams) {
+                const blob = new Blob([JSON.stringify(window.currentJobParams.parameters, null, 2)], {
+                    type: 'application/json'
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `job-${window.currentJobParams.jobId}-parameters.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+        }
+    });
+    
+    // Close modals when clicking outside
+    window.addEventListener('click', (e) => {
+        const modals = document.querySelectorAll('.modal');
+        modals.forEach(modal => {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+    });
 });

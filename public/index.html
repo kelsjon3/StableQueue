@@ -74,6 +74,20 @@
                     </div>
                 </div>
             </div>
+            
+            <div id="job-params-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <span class="close-modal">&times;</span>
+                    <div class="modal-body">
+                        <h3>Generation Parameters</h3>
+                        <div id="job-params-content"></div>
+                        <div id="job-params-actions">
+                            <button id="copy-params-btn" class="secondary-button">Copy to Clipboard</button>
+                            <button id="download-params-btn" class="secondary-button">Download JSON</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </section>
 
         <section id="gallery-view" style="display: none;">
@@ -198,25 +212,37 @@
             </div>
             
             <div id="api-key-result-container" class="card" style="display: none;">
-                <h3>API Key Created</h3>
-                <p class="alert alert-warning">This is the only time the full API key will be displayed. Make sure to copy it now!</p>
+                <h3>API Key Created Successfully</h3>
+                <p class="alert alert-warning"><strong>⚠️ IMPORTANT:</strong> This is the only time these credentials will be displayed. Make sure to copy both the API Key and API Secret now!</p>
                 
                 <div class="api-key-result">
                     <div class="form-group">
-                        <label for="new-api-key">API Key:</label>
+                        <label for="new-api-key"><strong>API Key</strong> (for X-API-Key header):</label>
                         <div class="input-with-button">
                             <input type="text" id="new-api-key" readonly>
-                            <button type="button" id="copy-api-key-btn" class="secondary-button">Copy</button>
+                            <button type="button" id="copy-api-key-btn" class="secondary-button">Copy Key</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-api-secret"><strong>API Secret</strong> (for X-API-Secret header):</label>
+                        <div class="input-with-button">
+                            <input type="text" id="new-api-secret" readonly>
+                            <button type="button" id="copy-api-secret-btn" class="secondary-button">Copy Secret</button>
                         </div>
                     </div>
                     <div class="api-key-details">
-                        <p><strong>ID:</strong> <span id="new-api-key-id"></span></p>
+                        <p><strong>Key ID:</strong> <span id="new-api-key-id"></span> <small>(not used for authentication)</small></p>
                         <p><strong>Name:</strong> <span id="new-api-key-name"></span></p>
                         <p><strong>Created:</strong> <span id="new-api-key-created"></span></p>
                     </div>
+                    <div class="api-usage-example">
+                        <h4>Usage Example:</h4>
+                        <pre><code>curl -H "X-API-Key: [API Key]" -H "X-API-Secret: [API Secret]" ...</code></pre>
+                    </div>
                 </div>
                 <div class="form-buttons">
-                    <button id="done-api-key-btn" class="primary-button">Done</button>
+                    <button id="copy-both-btn" class="primary-button">Copy Both Credentials</button>
+                    <button id="done-api-key-btn" class="secondary-button">Done</button>
                 </div>
             </div>
             

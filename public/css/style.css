@@ -329,7 +329,7 @@ button {
 
 .modal-content {
     position: relative;
-    background-color: #1e1e1e;
+    background-color: #ffffff;
     margin: 5% auto;
     padding: 20px;
     border-radius: 12px;
@@ -337,14 +337,14 @@ button {
     max-width: 90%;
     max-height: 90vh;
     overflow: auto;
-    color: #f0f0f0;
+    color: #333333;
 }
 
 .close {
     position: absolute;
     right: 20px;
     top: 10px;
-    color: #aaa;
+    color: #666;
     font-size: 28px;
     font-weight: bold;
     z-index: 10;
@@ -354,7 +354,25 @@ button {
 
 .close:hover,
 .close:focus {
-    color: #fff;
+    color: #333;
+    text-decoration: none;
+}
+
+.close-modal {
+    position: absolute;
+    right: 20px;
+    top: 10px;
+    color: #666;
+    font-size: 28px;
+    font-weight: bold;
+    z-index: 10;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.close-modal:hover,
+.close-modal:focus {
+    color: #333;
     text-decoration: none;
 }
 
@@ -2025,6 +2043,320 @@ button {
 
 .error-message {
     color: var(--danger-color);
-    text-align: center;
+    font-size: 0.9rem;
+    margin-top: 0.25rem;
+}
+
+/* Generation Parameters Modal Styles */
+.job-params-display {
+    max-height: 70vh;
+    overflow-y: auto;
+    color: #333333;
+}
+
+.job-params-header {
+    background-color: #f8f9fa;
     padding: 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    color: #333333;
+}
+
+.job-params-header h4 {
+    margin-bottom: 0.5rem;
+    color: var(--primary-color);
+}
+
+.job-params-header p {
+    margin-bottom: 0.25rem;
+    color: #333333;
+}
+
+.job-params-body {
+    margin-bottom: 1rem;
+}
+
+.param-section {
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+    background-color: #ffffff;
+}
+
+.param-section h5 {
+    background-color: #e9ecef;
+    padding: 0.75rem;
+    margin: 0;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 600;
+    color: #333333;
+}
+
+.params-table {
+    width: 100%;
+    border-collapse: collapse;
+    background-color: #ffffff;
+}
+
+.params-table tr:nth-child(even) {
+    background-color: #f8f9fa;
+}
+
+.params-table tr:nth-child(odd) {
+    background-color: #ffffff;
+}
+
+.param-name {
+    padding: 0.5rem 0.75rem;
+    font-weight: 500;
+    color: #333333;
+    width: 25%;
+    vertical-align: top;
+    border-bottom: 1px solid #e9ecef;
+    background-color: inherit;
+}
+
+.param-value {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #e9ecef;
+    word-break: break-word;
+    color: #333333;
+    background-color: inherit;
+}
+
+.param-text {
+    color: #333333;
+}
+
+.param-text-long {
+    max-height: 100px;
+    overflow-y: auto;
+    background-color: #f8f9fa;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    color: #333333;
+    border: 1px solid #e9ecef;
+}
+
+.param-number {
+    color: #0066cc;
+    font-weight: 500;
+}
+
+.param-boolean {
+    color: #28a745;
+    font-weight: 500;
+}
+
+.param-null {
+    color: #6c757d;
+    font-style: italic;
+}
+
+.param-array, .param-object {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.param-array pre, .param-object pre {
+    background-color: #f8f9fa;
+    padding: 0.5rem;
+    border-radius: 4px;
+    margin: 0;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    color: #333333;
+    border: 1px solid #e9ecef;
+}
+
+.param-array-empty {
+    color: #6c757d;
+    font-style: italic;
+}
+
+.job-params-raw {
+    margin-top: 1rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+}
+
+.job-params-raw details {
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    padding: 0.5rem;
+    color: #333333;
+}
+
+.job-params-raw summary {
+    cursor: pointer;
+    font-weight: 500;
+    padding: 0.5rem;
+    background-color: #e9ecef;
+    margin: -0.5rem;
+    border-radius: 4px;
+    user-select: none;
+    color: #333333;
+}
+
+.job-params-raw summary:hover {
+    background-color: #dee2e6;
+    color: #333333;
+}
+
+#raw-params-json {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 0.5rem 0 0 0;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    max-height: 300px;
+    overflow-y: auto;
+    color: #333333;
+}
+
+#job-params-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+/* API Key Display Improvements */
+.api-usage-example {
+    margin-top: 1rem;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+}
+
+.api-usage-example h4 {
+    margin: 0 0 0.5rem 0;
+    color: var(--primary-color);
+    font-size: 0.9rem;
+}
+
+.api-usage-example pre {
+    background-color: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 0.75rem;
+    margin: 0;
+    font-size: 0.85rem;
+    color: #333333;
+    overflow-x: auto;
+}
+
+.api-usage-reminder {
+    margin-top: 1rem;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+}
+
+.api-usage-reminder h4 {
+    margin: 0 0 0.5rem 0;
+    color: var(--primary-color);
+    font-size: 0.9rem;
+}
+
+.api-usage-reminder pre {
+    background-color: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 0.75rem;
+    margin: 0;
+    font-size: 0.85rem;
+    color: #333333;
+    overflow-x: auto;
+}
+
+/* Enhanced API Key Result Display */
+#api-key-result-container .form-group {
+    margin-bottom: 1rem;
+}
+
+#api-key-result-container .input-with-button {
+    display: flex;
+    gap: 0.5rem;
+}
+
+#api-key-result-container .input-with-button input {
+    flex: 1;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+}
+
+#api-key-result-container .input-with-button button {
+    min-width: 100px;
+    white-space: nowrap;
+}
+
+#api-key-result-container .api-key-details {
+    margin-top: 1rem;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+}
+
+#api-key-result-container .api-key-details p {
+    margin: 0.25rem 0;
+}
+
+#api-key-result-container .api-key-details small {
+    color: #6c757d;
+    font-style: italic;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .job-params-display {
+        max-height: 60vh;
+    }
+    
+    .param-name {
+        width: 35%;
+    }
+    
+    .params-table {
+        font-size: 0.9rem;
+    }
+    
+    .param-name, .param-value {
+        padding: 0.4rem;
+    }
+    
+    #job-params-actions {
+        flex-direction: column;
+    }
+    
+    #job-params-actions button {
+        width: 100%;
+    }
+    
+    /* API Key mobile adjustments */
+    #api-key-result-container .input-with-button {
+        flex-direction: column;
+    }
+    
+    #api-key-result-container .input-with-button button {
+        width: 100%;
+    }
+    
+    .api-usage-example pre,
+    .api-usage-reminder pre {
+        font-size: 0.75rem;
+        padding: 0.5rem;
+    }
 }

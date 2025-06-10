@@ -7,6 +7,148 @@ const { apiAuthWithJobRateLimit } = require('../middleware/apiMiddleware');
 const { handleApiError } = require('../utils/apiErrorHandler');
 
 /**
+ * Helper function to process generation payloads from Forge extensions
+ */
+function processGenerationPayload(generationParams) {
+    console.log(`[API v2] Processing payload type: ${generationParams.type || 'standard'}`);
+    
+    // Check if this is already a complete /sdapi/v1/ payload
+    if (generationParams.prompt !== undefined || generationParams.positive_prompt !== undefined) {
+        console.log(`[API v2] ✅ Complete /sdapi/v1/ payload detected - using directly`);
+        
+        // Ensure prompt field is standardized
+        if (generationParams.positive_prompt && !generationParams.prompt) {
+            generationParams.prompt = generationParams.positive_prompt;
+        }
+        
+        console.log(`[API v2] Complete payload - prompt: "${(generationParams.prompt || '').substring(0, 50)}...", keys: ${Object.keys(generationParams).length}`);
+        return generationParams;
+    }
+    
+    // Legacy handling for raw Gradio payloads (if needed)
+    if (generationParams.type === 'gradio_raw') {
+        // This is a raw Gradio payload from the extension
+        console.log(`[API v2] Converting raw Gradio payload for tab: ${generationParams.tab_id}`);
+        
+        const rawPayload = generationParams.raw_payload;
+        if (!rawPayload || !rawPayload.data || !Array.isArray(rawPayload.data)) {
+            throw new Error("Invalid Gradio payload structure - missing data array");
+        }
+        
+        const gradioData = rawPayload.data;
+        console.log(`[API v2] Gradio data array length: ${gradioData.length}`);
+        
+        // Convert Gradio array data to standard SDAPI format
+        // Note: Array positions may vary by Forge version, this is a best-effort conversion
+        const convertedParams = {
+            prompt: "",
+            negative_prompt: "",
+            styles: [],
+            seed: -1,
+            subseed: -1,
+            subseed_strength: 0,
+            steps: 20,
+            sampler_name: "Euler a",
+            width: 512,
+            height: 512,
+            cfg_scale: 7.0,
+            batch_size: 1,
+            n_iter: 1,
+            restore_faces: false,
+            tiling: false,
+            send_images: true,
+            save_images: true,
+            override_settings: {},
+            script_name: null,
+            script_args: []
+        };
+        
+        try {
+            // Extract parameters from Gradio data array
+            // Note: Array positions are based on observed Forge behavior
+            
+            // Basic text parameters
+            if (gradioData[0] && typeof gradioData[0] === 'string') {
+                convertedParams.prompt = gradioData[0];
+            }
+            
+            if (gradioData[2] && typeof gradioData[2] === 'string') {
+                convertedParams.negative_prompt = gradioData[2];
+            }
+            
+            // Look for seed at position 17 (based on logs showing -1 values)
+            if (gradioData[17] && typeof gradioData[17] === 'number') {
+                convertedParams.seed = gradioData[17];
+            }
+            
+            // Look for steps, cfg_scale, width, height in other positions
+            // Since we don't see clear numeric values in the array, use defaults
+            
+            // Look for scheduler/quality preset at the end
+            if (gradioData[23] && typeof gradioData[23] === 'string') {
+                if (gradioData[23] !== 'Balanced') {
+                    convertedParams.sampler_name = gradioData[23];
+                }
+            }
+            
+            // Look for other settings
+            if (gradioData[21] && typeof gradioData[21] === 'number') {
+                convertedParams.batch_size = gradioData[21];
+            }
+            
+            // Look for extension data (ControlNet, etc.) in remaining array elements
+            for (let i = 8; i < gradioData.length; i++) {
+                const item = gradioData[i];
+                
+                if (item && typeof item === 'object') {
+                    // Extension data found - preserve it
+                    if (convertedParams.script_args.length === 0) {
+                        convertedParams.script_name = "forge_extension_data";
+                    }
+                    convertedParams.script_args.push(item);
+                }
+                
+                // Check for model/checkpoint references
+                if (typeof item === 'string' && (item.includes('.safetensors') || item.includes('.ckpt'))) {
+                    convertedParams.override_settings.sd_model_checkpoint = item;
+                }
+            }
+            
+            // Set a default checkpoint if none found - this will use the current model on the target server
+            if (!convertedParams.checkpoint_name && !convertedParams.override_settings.sd_model_checkpoint) {
+                console.log(`[API v2] No checkpoint found in Gradio payload, will use current model on target server`);
+                convertedParams.checkpoint_name = null; // Let the target server use its current model
+            }
+            
+            // Store the original Gradio payload for debugging/reference
+            convertedParams._original_gradio_payload = {
+                tab_id: generationParams.tab_id,
+                source_url: generationParams.source_url,
+                forge_session_hash: generationParams.forge_session_hash,
+                fn_index: generationParams.fn_index,
+                data_length: gradioData.length,
+                raw_data_sample: gradioData.slice(0, 10) // Store first 10 elements for debugging
+            };
+            
+        } catch (error) {
+            console.warn(`[API v2] Error extracting some Gradio parameters:`, error);
+            // Continue with partial extraction - better than complete failure
+        }
+        
+        console.log(`[API v2] Converted Gradio payload - prompt: "${convertedParams.prompt.substring(0, 50)}...", steps: ${convertedParams.steps}, size: ${convertedParams.width}x${convertedParams.height}`);
+        
+        return convertedParams;
+    } else if (generationParams.type === 'gradio') {
+        // This is already a Gradio payload but not the raw format - handle gracefully
+        console.log(`[API v2] Received non-raw Gradio payload, processing as standard parameters`);
+        return generationParams.raw_payload || generationParams;
+    } else {
+        // Standard SDAPI format or already converted
+        return generationParams;
+    }
+}
+
+/**
  * @route POST /api/v2/generate
  * @description Submit a new generation job with extended parameters for app type and authentication
  * @access Requires API key
@@ -42,16 +184,28 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
     // Default app_type is 'forge' if not specified
     const validAppType = app_type || 'forge';
     
+    // Process generation payloads from extensions
+    let processedParams;
+    try {
+        processedParams = processGenerationPayload(generation_params);
+    } catch (error) {
+        console.error(`[API v2] Error processing generation payload:`, error);
+        return handleApiError(res, 'INVALID_FIELD_VALUE', req, {
+            field: 'generation_params',
+            customMessage: `Failed to process generation parameters: ${error.message}`
+        });
+    }
+    
     // More robust checkpoint parameter normalization
     console.log(`[API v2] Checking generation parameters for app_type: ${validAppType}`);
     
-    if (generation_params.checkpoint_name && validAppType === 'forge') {
+    if (processedParams.checkpoint_name && validAppType === 'forge') {
         // Normalize checkpoint paths for Forge
-        console.log(`[API v2] Normalizing checkpoint path: ${generation_params.checkpoint_name}`);
+        console.log(`[API v2] Normalizing checkpoint path: ${processedParams.checkpoint_name}`);
         try {
             // Convert both forward and backslashes to system-specific separator
-            const normalizedPath = generation_params.checkpoint_name.replace(/[\/\\]+/g, '/');
-            generation_params.checkpoint_name = normalizedPath;
+            const normalizedPath = processedParams.checkpoint_name.replace(/[\/\\]+/g, '/');
+            processedParams.checkpoint_name = normalizedPath;
             console.log(`[API v2] Normalized checkpoint path: ${normalizedPath}`);
         } catch (error) {
             console.error(`[API v2] Error normalizing checkpoint path:`, error);
@@ -86,7 +240,7 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
         // Add the job to the queue with extended information
         const jobDataForQueue = {
             target_server_alias,
-            generation_params,
+            generation_params: processedParams, // Use processed parameters
             app_type: validAppType,
             source_info: source_info || 'extension', // Default source is 'extension'
             api_key_id: req.apiKeyId // From the authentication middleware
@@ -126,6 +280,8 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
         }, error);
     }
 });
+
+// Bulk endpoint will be added later - focusing on single job functionality first
 
 /**
  * @route GET /api/v2/jobs/:jobId/status

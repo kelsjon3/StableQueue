@@ -30,7 +30,10 @@ class ApiKeyManagerUI {
         // Result elements
         this.apiKeyResultContainer = document.getElementById('api-key-result-container');
         this.newApiKeyInput = document.getElementById('new-api-key');
+        this.newApiSecretInput = document.getElementById('new-api-secret');
         this.copyApiKeyBtn = document.getElementById('copy-api-key-btn');
+        this.copyApiSecretBtn = document.getElementById('copy-api-secret-btn');
+        this.copyBothBtn = document.getElementById('copy-both-btn');
         this.newApiKeyId = document.getElementById('new-api-key-id');
         this.newApiKeyName = document.getElementById('new-api-key-name');
         this.newApiKeyCreated = document.getElementById('new-api-key-created');
@@ -70,6 +73,14 @@ class ApiKeyManagerUI {
         
         if (this.copyApiKeyBtn) {
             this.copyApiKeyBtn.addEventListener('click', () => this.copyApiKeyToClipboard());
+        }
+        
+        if (this.copyApiSecretBtn) {
+            this.copyApiSecretBtn.addEventListener('click', () => this.copyApiSecretToClipboard());
+        }
+        
+        if (this.copyBothBtn) {
+            this.copyBothBtn.addEventListener('click', () => this.copyBothCredentialsToClipboard());
         }
         
         if (this.doneApiKeyBtn) {
@@ -330,8 +341,9 @@ class ApiKeyManagerUI {
     
     // Show the API key result view after creation
     showKeyResult(keyData) {
-        // Populate result view
+        // Populate result view with both key and secret
         this.newApiKeyInput.value = keyData.key;
+        this.newApiSecretInput.value = keyData.secret;
         this.newApiKeyId.textContent = keyData.id;
         this.newApiKeyName.textContent = keyData.name;
         
@@ -363,6 +375,57 @@ class ApiKeyManagerUI {
             .catch(err => {
                 console.error('Failed to copy API key:', err);
                 alert('Failed to copy API key to clipboard. Please select and copy it manually.');
+            });
+    }
+
+    // Copy API secret to clipboard
+    copyApiSecretToClipboard() {
+        const secretValue = this.newApiSecretInput.value;
+        if (!secretValue) return;
+        
+        // Use modern clipboard API
+        navigator.clipboard.writeText(secretValue)
+            .then(() => {
+                // Change button text temporarily to show success
+                const originalText = this.copyApiSecretBtn.textContent;
+                this.copyApiSecretBtn.textContent = 'Copied!';
+                
+                // Reset button text after a delay
+                setTimeout(() => {
+                    this.copyApiSecretBtn.textContent = originalText;
+                }, 2000);
+            })
+            .catch(err => {
+                console.error('Failed to copy API secret:', err);
+                alert('Failed to copy API secret to clipboard. Please select and copy it manually.');
+            });
+    }
+
+    // Copy both API key and secret to clipboard (formatted for easy use)
+    copyBothCredentialsToClipboard() {
+        const keyValue = this.newApiKeyInput.value;
+        const secretValue = this.newApiSecretInput.value;
+        
+        if (!keyValue || !secretValue) return;
+        
+        // Format both credentials in a useful way
+        const bothCredentials = `API Key: ${keyValue}\nAPI Secret: ${secretValue}`;
+        
+        // Use modern clipboard API
+        navigator.clipboard.writeText(bothCredentials)
+            .then(() => {
+                // Change button text temporarily to show success
+                const originalText = this.copyBothBtn.textContent;
+                this.copyBothBtn.textContent = 'Copied Both!';
+                
+                // Reset button text after a delay
+                setTimeout(() => {
+                    this.copyBothBtn.textContent = originalText;
+                }, 2000);
+            })
+            .catch(err => {
+                console.error('Failed to copy credentials:', err);
+                alert('Failed to copy credentials to clipboard. Please select and copy them manually.');
             });
     }
     
@@ -409,13 +472,20 @@ class ApiKeyManagerUI {
             // Populate modal content
             this.apiKeyDetailsContent.innerHTML = `
                 <div class="key-details">
-                    <p><strong>ID:</strong> ${key.id}</p>
+                    <p><strong>Key ID:</strong> ${key.id} <small>(not used for authentication)</small></p>
+                    <p><strong>API Key:</strong> ${key.key} <small>(for X-API-Key header)</small></p>
+                    <p><strong>API Secret:</strong> <em>Hidden for security</em> <small>(for X-API-Secret header)</small></p>
                     <p><strong>Name:</strong> ${key.name}</p>
                     <p><strong>Description:</strong> ${key.description || '—'}</p>
                     <p><strong>Status:</strong> ${key.is_active ? 'Active' : 'Inactive'}</p>
                     <p><strong>Created:</strong> ${formattedDate}</p>
                     ${lastUsedHtml}
                     ${usageHtml}
+                    <div class="api-usage-reminder">
+                        <h4>Authentication Headers:</h4>
+                        <pre><code>X-API-Key: ${key.key}
+X-API-Secret: [secret from key creation]</code></pre>
+                    </div>
                 </div>
             `;
             

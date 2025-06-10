@@ -332,15 +332,8 @@ async function processJob(job) {
     }
     
     if (!checkpoint_name) {
-        console.error(`[Dispatcher] Job ${mobilesd_job_id}: CRITICAL ERROR - Missing 'checkpoint_name' in generation_params. Raw parameters:`, generation_params_json);
-        await jobQueue.updateJob(mobilesd_job_id, { 
-            status: 'failed', 
-            result_details_json: JSON.stringify({ 
-                error: "Missing 'checkpoint_name' in generation parameters.",
-                raw_params: generation_params_json.substring(0, 1000) // Include part of the raw params for debugging
-            }) 
-        });
-        return;
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: No checkpoint specified, will use current model on target server.`);
+        checkpoint_name = null; // This will skip checkpoint switching
     }
 
     console.log(`[Dispatcher] Job ${mobilesd_job_id}: Confirmed checkpoint to use: "${checkpoint_name}"`);
@@ -397,13 +390,15 @@ async function processJob(job) {
             }
         }
         
-        // APPROACH 1: Set the active checkpoint using the /sdapi/v1/options endpoint
+        // APPROACH 1: Set the active checkpoint using the /sdapi/v1/options endpoint (if checkpoint specified)
+        let normalizedCheckpoint = null;
+        if (original_checkpoint_name) {
         const optionsPayload = {
             sd_model_checkpoint: original_checkpoint_name
         };
         
         // Normalize checkpoint path - default to forward slashes
-        let normalizedCheckpoint = original_checkpoint_name.replace(/\\/g, '/');
+            normalizedCheckpoint = original_checkpoint_name.replace(/\\/g, '/');
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${original_checkpoint_name}', normalized to: '${normalizedCheckpoint}' (assuming Linux/forward-slash paths).`);
         
         // Use the normalized path
@@ -412,9 +407,16 @@ async function processJob(job) {
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Setting active checkpoint to '${normalizedCheckpoint}' using /sdapi/v1/options API...`);
         await axios.post(`${forgeBaseUrl}/sdapi/v1/options`, optionsPayload, axiosConfig);
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Active checkpoint set successfully via REST API.`);
+        } else {
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Skipping checkpoint switch - will use current model on target server.`);
+        }
         
-        // APPROACH 2: Also include the checkpoint in the override_settings for the txt2img request
+        // APPROACH 2: Also include the checkpoint in the override_settings for the txt2img request (if specified)
+        if (normalizedCheckpoint) {
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Preparing generation request with override_settings for checkpoint '${normalizedCheckpoint}'`);
+        } else {
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Preparing generation request using current server model (no checkpoint override).`);
+        }
         
         // Construct generation data array for Gradio API
         const generationDataArray = constructGenerationPayloadData(generation_params, forgeInternalTaskId, false);
