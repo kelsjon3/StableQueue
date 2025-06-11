@@ -185,27 +185,74 @@ function constructGenerationPayloadData(params, forgeInternalTaskId, isWindowsSe
     
     // Apply parameters from the job to the HAR-based template
     data[0] = forgeInternalTaskId;
-    // IMPORTANT: Make sure positive_prompt is set correctly at position 1
+    
+    // IMPORTANT: Set all the key parameters from parsed generation info
     if (params.positive_prompt !== undefined) {
         data[1] = params.positive_prompt;
-        console.log(`[Dispatcher] Set positive prompt in data[1] to: "${data[1]}"`);
+        console.log(`[Dispatcher] Set positive prompt in data[1] to: "${data[1].substring(0, 50)}${data[1].length > 50 ? '...' : ''}"`);
     } else if (params.prompt !== undefined) {
-        // Also check for 'prompt' which is the key name in the API request
         data[1] = params.prompt;
-        console.log(`[Dispatcher] Set positive prompt in data[1] from 'prompt' parameter: "${data[1]}"`);
+        console.log(`[Dispatcher] Set positive prompt in data[1] from 'prompt' parameter: "${data[1].substring(0, 50)}${data[1].length > 50 ? '...' : ''}"`);
     }
-    if (params.negative_prompt !== undefined) data[2] = params.negative_prompt;
+    
+    if (params.negative_prompt !== undefined) {
+        data[2] = params.negative_prompt;
+        console.log(`[Dispatcher] Set negative prompt in data[2] to: "${data[2].substring(0, 50)}${data[2].length > 50 ? '...' : ''}"`);
+    }
+    
     if (params.styles !== undefined) data[3] = params.styles; // Array of strings
     if (params.batch_count !== undefined) data[4] = parseInt(params.batch_count, 10);
     if (params.batch_size !== undefined) data[5] = parseInt(params.batch_size, 10);
-    if (params.steps !== undefined) data[6] = parseInt(params.steps, 10);
-    if (params.cfg_scale !== undefined) data[7] = parseFloat(params.cfg_scale);
-    if (params.width !== undefined) data[8] = parseInt(params.width, 10);
-    if (params.height !== undefined) data[9] = parseInt(params.height, 10);
-
+    
+    // Set generation parameters from parsed info
+    if (params.cfg_scale !== undefined) {
+        data[6] = parseFloat(params.cfg_scale);
+        console.log(`[Dispatcher] Set CFG scale in data[6] to: ${data[6]}`);
+    }
+    
+    if (params.width !== undefined) {
+        data[8] = parseInt(params.width, 10);
+        console.log(`[Dispatcher] Set width in data[8] to: ${data[8]}`);
+    }
+    
+    if (params.height !== undefined) {
+        data[9] = parseInt(params.height, 10);
+        console.log(`[Dispatcher] Set height in data[9] to: ${data[9]}`);
+    }
+    
+    if (params.steps !== undefined) {
+        data[27] = parseInt(params.steps, 10);
+        console.log(`[Dispatcher] Set steps in data[27] to: ${data[27]}`);
+    }
+    
+    if (params.sampler_name !== undefined) {
+        data[28] = params.sampler_name;
+        console.log(`[Dispatcher] Set sampler in data[28] to: ${data[28]}`);
+    }
+    
+    if (params.schedule_type !== undefined) {
+        data[29] = params.schedule_type;
+        console.log(`[Dispatcher] Set schedule type in data[29] to: ${data[29]}`);
+    }
+    
+    if (params.seed !== undefined && params.seed !== -1) {
+        data[33] = parseInt(params.seed, 10);
+        console.log(`[Dispatcher] Set seed in data[33] to: ${data[33]}`);
+    }
+    
+    // Handle hi-res fix parameters if present
+    if (params.denoising_strength !== undefined) {
+        data[11] = parseFloat(params.denoising_strength);
+        console.log(`[Dispatcher] Set denoising strength in data[11] to: ${data[11]}`);
+    }
+    
+    if (params.hr_scale !== undefined) {
+        data[12] = parseFloat(params.hr_scale);
+        console.log(`[Dispatcher] Set hires scale in data[12] to: ${data[12]}`);
+    }
+    
+    // Additional parameter mappings (avoiding duplication)
     if (params.enable_hr !== undefined) data[10] = !!params.enable_hr;
-    if (params.denoising_strength !== undefined) data[11] = parseFloat(params.denoising_strength);
-    if (params.hr_scale !== undefined) data[12] = parseFloat(params.hr_scale);
     if (params.hr_upscaler !== undefined) data[13] = params.hr_upscaler;
     if (params.hr_second_pass_steps !== undefined) data[14] = parseInt(params.hr_second_pass_steps, 10);
     if (params.hr_resize_x !== undefined) data[15] = parseInt(params.hr_resize_x, 10);
@@ -217,21 +264,21 @@ function constructGenerationPayloadData(params, forgeInternalTaskId, isWindowsSe
     // Set script name to empty to disable scripts
     data[26] = "";  // script_name
     
-    if (params.sampler_name !== undefined) data[28] = params.sampler_name;
     if (params.scheduler !== undefined) data[29] = params.scheduler;
-
     if (params.clip_skip !== undefined) data[27] = parseInt(params.clip_skip, 10);
     
     if (params.restore_faces !== undefined) data[30] = !!params.restore_faces;
     if (params.tiling !== undefined) data[31] = !!params.tiling; 
 
-    if (params.seed !== undefined) {
-        const seedVal = parseInt(params.seed, 10);
-        data[39] = (seedVal === -1 || isNaN(seedVal)) ? null : seedVal;
-    }
-    
-    // Return log of critical values to verify they're set properly
-    console.log(`[Dispatcher] Final prompt value in data[1]: "${data[1]}"`);
+    // Final summary of critical parameters
+    console.log(`[Dispatcher] Final data array summary:`);
+    console.log(`  - Prompt (data[1]): "${data[1] ? data[1].substring(0, 50) + '...' : 'empty'}"`);
+    console.log(`  - Negative (data[2]): "${data[2] ? data[2].substring(0, 30) + '...' : 'empty'}"`);
+    console.log(`  - Steps (data[27]): ${data[27]}`);
+    console.log(`  - CFG (data[6]): ${data[6]}`);
+    console.log(`  - Size (data[8]x[9]): ${data[8]}x${data[9]}`);
+    console.log(`  - Sampler (data[28]): ${data[28]}`);
+    console.log(`  - Seed (data[33]): ${data[33]}`);
     
     return data;
 }
@@ -544,23 +591,28 @@ async function processJob(job) {
             }
         }
         
-        // APPROACH 1: Set the active checkpoint using the /sdapi/v1/options endpoint (if checkpoint specified)
+        // APPROACH 1: Set the active checkpoint using the /sdapi/v1/options endpoint (if checkpoint specified and REST API available)
         let normalizedCheckpoint = null;
         if (original_checkpoint_name) {
-        const optionsPayload = {
-            sd_model_checkpoint: original_checkpoint_name
-        };
-        
-        // Normalize checkpoint path - default to forward slashes
+            const optionsPayload = {
+                sd_model_checkpoint: original_checkpoint_name
+            };
+            
+            // Normalize checkpoint path - default to forward slashes
             normalizedCheckpoint = original_checkpoint_name.replace(/\\/g, '/');
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${original_checkpoint_name}', normalized to: '${normalizedCheckpoint}' (assuming Linux/forward-slash paths).`);
-        
-        // Use the normalized path
-        optionsPayload.sd_model_checkpoint = normalizedCheckpoint;
-        
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Setting active checkpoint to '${normalizedCheckpoint}' using /sdapi/v1/options API...`);
-        await axios.post(`${forgeBaseUrl}/sdapi/v1/options`, optionsPayload, axiosConfig);
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Active checkpoint set successfully via REST API.`);
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${original_checkpoint_name}', normalized to: '${normalizedCheckpoint}' (assuming Linux/forward-slash paths).`);
+            
+            // Use the normalized path
+            optionsPayload.sd_model_checkpoint = normalizedCheckpoint;
+            
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Attempting to set active checkpoint to '${normalizedCheckpoint}' using /sdapi/v1/options API...`);
+            try {
+                await axios.post(`${forgeBaseUrl}/sdapi/v1/options`, optionsPayload, axiosConfig);
+                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Active checkpoint set successfully via REST API.`);
+            } catch (restApiError) {
+                console.warn(`[Dispatcher] Job ${mobilesd_job_id}: REST API checkpoint setting failed (${restApiError.response?.status}). This is okay - checkpoint will be handled via Gradio override_settings.`);
+                // Don't fail the job - checkpoint can be set via Gradio override_settings
+            }
         } else {
             console.log(`[Dispatcher] Job ${mobilesd_job_id}: Skipping checkpoint switch - will use current model on target server.`);
         }
