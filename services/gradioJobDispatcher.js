@@ -43,7 +43,7 @@ function constructGenerationPayloadData(params, forgeInternalTaskId, isWindowsSe
     }
     
     // This entire array is based on the provided HAR data for fn_index: 257
-    // It has 124 elements, but Forge is expecting 137 elements
+    // It has 124 elements, but Forge is expecting 140 elements
     // We'll start with the 124 elements and then extend it
     const data = JSON.parse(String.raw`[
         "task(u1axq3memngtu5x)", 
@@ -172,13 +172,13 @@ function constructGenerationPayloadData(params, forgeInternalTaskId, isWindowsSe
         ""                       
     ]`);
 
-    // Add 13 additional default values to accommodate the 137 expected inputs
+    // Add 16 additional default values to accommodate the 140 expected inputs
     // These default values are placeholders and should be updated based on your Forge's requirements
-    for (let i = 0; i < 13; i++) {
+    for (let i = 0; i < 16; i++) {
         data.push("");  // Add empty string defaults for the missing parameters
     }
 
-    console.log(`[Dispatcher] Constructed data array with ${data.length} elements (Forge expects 137)`);
+    console.log(`[Dispatcher] Constructed data array with ${data.length} elements (Forge expects 140)`);
 
     // Debug prompt values before applying
     console.log(`[Dispatcher] Positive prompt parameter: "${params.positive_prompt}"`);
