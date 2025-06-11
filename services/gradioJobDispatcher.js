@@ -237,6 +237,131 @@ function constructGenerationPayloadData(params, forgeInternalTaskId, isWindowsSe
 }
 
 // Removed: constructForgeGenerationPayload function
+/**
+ * Parse raw generation info string into structured parameters
+ * This function handles generation info strings from extensions like Civitai Browser+
+ */
+function parseRawGenerationInfo(rawGenInfo) {
+    if (!rawGenInfo || typeof rawGenInfo !== 'string') {
+        throw new Error('Invalid raw generation info provided');
+    }
+    
+    const params = {};
+    const lines = rawGenInfo.trim().split('\n');
+    
+    if (lines.length === 0) {
+        throw new Error('Empty generation info string');
+    }
+    
+    // First line is typically the positive prompt
+    params.positive_prompt = lines[0].trim();
+    params.prompt = params.positive_prompt; // Also set prompt for compatibility
+    
+    // Initialize defaults
+    params.negative_prompt = "";
+    params.steps = 20;
+    params.cfg_scale = 7.0;
+    params.width = 512;
+    params.height = 512;
+    params.sampler_name = "Euler a";
+    params.seed = -1;
+    params.batch_size = 1;
+    params.n_iter = 1;
+    params.send_images = true;
+    params.save_images = true;
+    
+    // Look for negative prompt and parameters
+    let parametersLine = "";
+    
+    for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith('Negative prompt:')) {
+            params.negative_prompt = line.substring(16).trim(); // Remove "Negative prompt: " prefix
+        } else if (line.includes('Steps:') || line.includes('Sampler:') || line.includes('CFG scale:')) {
+            parametersLine = line;
+            break;
+        }
+    }
+    
+    // Parse parameters from the parameters line
+    if (parametersLine) {
+        const paramParts = parametersLine.split(',').map(part => part.trim());
+        
+        for (const part of paramParts) {
+            if (!part.includes(':')) continue;
+            
+            const [key, ...valueParts] = part.split(':');
+            const keyLower = key.trim().toLowerCase();
+            const value = valueParts.join(':').trim();
+            
+            try {
+                switch (keyLower) {
+                    case 'steps':
+                        params.steps = parseInt(value, 10);
+                        break;
+                    case 'sampler':
+                        params.sampler_name = value;
+                        break;
+                    case 'cfg scale':
+                        params.cfg_scale = parseFloat(value);
+                        break;
+                    case 'seed':
+                        params.seed = parseInt(value, 10);
+                        break;
+                    case 'size':
+                        if (value.includes('x')) {
+                            const [width, height] = value.split('x');
+                            params.width = parseInt(width.trim(), 10);
+                            params.height = parseInt(height.trim(), 10);
+                        }
+                        break;
+                    case 'model':
+                        params.checkpoint_name = value;
+                        break;
+                    case 'model hash':
+                        params.model_hash = value;
+                        break;
+                    case 'clip skip':
+                        params.clip_skip = parseInt(value, 10);
+                        break;
+                    case 'denoising strength':
+                        params.denoising_strength = parseFloat(value);
+                        break;
+                    case 'schedule type':
+                        params.schedule_type = value;
+                        break;
+                    case 'hires upscale':
+                        params.hr_scale = parseFloat(value);
+                        break;
+                    case 'hires upscaler':
+                        params.hr_upscaler = value;
+                        break;
+                    case 'hires cfg scale':
+                        params.hr_second_pass_steps = parseFloat(value);
+                        break;
+                    case 'version':
+                        params.version = value;
+                        break;
+                    case 'lora hashes':
+                        // Handle LoRA information
+                        params.lora_hashes = value;
+                        break;
+                }
+            } catch (parseError) {
+                console.warn(`[Parser] Failed to parse parameter ${keyLower}: ${parseError.message}`);
+                // Continue parsing other parameters
+            }
+        }
+    }
+    
+    console.log(`[Parser] Parsed raw generation info into ${Object.keys(params).length} parameters`);
+    console.log(`[Parser] Prompt: "${params.positive_prompt.substring(0, 50)}${params.positive_prompt.length > 50 ? '...' : ''}"`);
+    console.log(`[Parser] Model: ${params.checkpoint_name || '(not specified)'}`);
+    console.log(`[Parser] Steps: ${params.steps}, CFG: ${params.cfg_scale}, Size: ${params.width}x${params.height}`);
+    
+    return params;
+}
+
 // Removed: dispatchJobToForge function
 // Removed: processQueue function
 
@@ -246,15 +371,44 @@ async function processJob(job) {
 
     let generation_params;
     try {
-        generation_params = JSON.parse(generation_params_json);
+        const parsed_params = JSON.parse(generation_params_json);
         
-        // Log the original generation parameters for debugging
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Parsed generation parameters:`, JSON.stringify({
+        // Check if this is raw generation info that needs parsing
+        if (parsed_params.raw_generation_info && typeof parsed_params.raw_generation_info === 'string') {
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Processing raw generation info from extension`);
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Raw generation info: ${parsed_params.raw_generation_info.substring(0, 100)}...`);
+            
+            try {
+                generation_params = parseRawGenerationInfo(parsed_params.raw_generation_info);
+                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Successfully parsed raw generation info`);
+            } catch (parseError) {
+                console.error(`[Dispatcher] Job ${mobilesd_job_id}: Failed to parse raw generation info: ${parseError.message}`);
+                await jobQueue.updateJob(mobilesd_job_id, { 
+                    status: 'failed', 
+                    result_details_json: JSON.stringify({ 
+                        error: 'Failed to parse raw generation info.', 
+                        details: parseError.message,
+                        raw_info: parsed_params.raw_generation_info.substring(0, 200) + '...'
+                    }) 
+                });
+                return;
+            }
+        } else {
+            // Standard generation parameters
+            generation_params = parsed_params;
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using standard generation parameters`);
+        }
+        
+        // Log the final generation parameters for debugging
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Final generation parameters:`, JSON.stringify({
             has_positive_prompt: !!(generation_params.positive_prompt || generation_params.prompt),
             positive_prompt: generation_params.positive_prompt || generation_params.prompt || "(empty)",
             has_negative_prompt: !!generation_params.negative_prompt,
             negative_prompt: generation_params.negative_prompt || "(empty)",
-            checkpoint: generation_params.checkpoint_name || generation_params.sd_checkpoint || "(none)"
+            checkpoint: generation_params.checkpoint_name || generation_params.sd_checkpoint || "(none)",
+            steps: generation_params.steps || 20,
+            cfg_scale: generation_params.cfg_scale || 7.0,
+            size: `${generation_params.width || 512}x${generation_params.height || 512}`
         }));
         
         // Ensure positive_prompt is at least an empty string, not undefined
