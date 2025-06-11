@@ -413,20 +413,35 @@ function parseRawGenerationInfo(rawGenInfo) {
 // Removed: processQueue function
 
 async function processJob(job) {
-    const { mobilesd_job_id, target_server_alias, generation_params_json } = job;
+    const { mobilesd_job_id, target_server_alias, generation_params_json, generation_params } = job;
     console.log(`[Dispatcher] Processing job ${mobilesd_job_id} for target '${target_server_alias}'`);
 
-    let generation_params;
+    let parsed_generation_params;
     try {
-        const parsed_params = JSON.parse(generation_params_json);
+        // Handle both formats: generation_params_json (string) and generation_params (object)
+        if (generation_params && typeof generation_params === 'object') {
+            // Manual dispatch or newer format - already an object
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using generation_params object directly`);
+            parsed_generation_params = generation_params;
+        } else if (generation_params_json && typeof generation_params_json === 'string') {
+            // Original format - JSON string that needs parsing
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Parsing generation_params_json string`);
+            parsed_generation_params = JSON.parse(generation_params_json);
+        } else {
+            throw new Error(`Neither generation_params nor generation_params_json provided. generation_params: ${typeof generation_params}, generation_params_json: ${typeof generation_params_json}`);
+        }
         
         // Check if this is raw generation info that needs parsing
-        if (parsed_params.raw_generation_info && typeof parsed_params.raw_generation_info === 'string') {
+        if (parsed_generation_params.raw_generation_info && typeof parsed_generation_params.raw_generation_info === 'string') {
             console.log(`[Dispatcher] Job ${mobilesd_job_id}: Processing raw generation info from extension`);
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Raw generation info: ${parsed_params.raw_generation_info.substring(0, 100)}...`);
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Raw generation info: ${parsed_generation_params.raw_generation_info.substring(0, 100)}...`);
             
             try {
-                generation_params = parseRawGenerationInfo(parsed_params.raw_generation_info);
+                parsed_generation_params = parseRawGenerationInfo(parsed_generation_params.raw_generation_info);
+                console.log(`[Parser] Parsed raw generation info into ${Object.keys(parsed_generation_params).length} parameters`);
+                console.log(`[Parser] Prompt: "${(parsed_generation_params.positive_prompt || parsed_generation_params.prompt || '').substring(0, 50)}..."`);
+                console.log(`[Parser] Model: ${parsed_generation_params.checkpoint_name || 'default'}`);
+                console.log(`[Parser] Steps: ${parsed_generation_params.steps || 20}, CFG: ${parsed_generation_params.cfg_scale || 7}, Size: ${parsed_generation_params.width || 512}x${parsed_generation_params.height || 512}`);
                 console.log(`[Dispatcher] Job ${mobilesd_job_id}: Successfully parsed raw generation info`);
             } catch (parseError) {
                 console.error(`[Dispatcher] Job ${mobilesd_job_id}: Failed to parse raw generation info: ${parseError.message}`);
@@ -435,56 +450,55 @@ async function processJob(job) {
                     result_details_json: JSON.stringify({ 
                         error: 'Failed to parse raw generation info.', 
                         details: parseError.message,
-                        raw_info: parsed_params.raw_generation_info.substring(0, 200) + '...'
+                        raw_info: parsed_generation_params.raw_generation_info.substring(0, 200) + '...'
                     }) 
                 });
                 return;
             }
         } else {
             // Standard generation parameters
-            generation_params = parsed_params;
             console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using standard generation parameters`);
         }
         
         // Log the final generation parameters for debugging
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: Final generation parameters:`, JSON.stringify({
-            has_positive_prompt: !!(generation_params.positive_prompt || generation_params.prompt),
-            positive_prompt: generation_params.positive_prompt || generation_params.prompt || "(empty)",
-            has_negative_prompt: !!generation_params.negative_prompt,
-            negative_prompt: generation_params.negative_prompt || "(empty)",
-            checkpoint: generation_params.checkpoint_name || generation_params.sd_checkpoint || "(none)",
-            steps: generation_params.steps || 20,
-            cfg_scale: generation_params.cfg_scale || 7.0,
-            size: `${generation_params.width || 512}x${generation_params.height || 512}`
+            has_positive_prompt: !!(parsed_generation_params.positive_prompt || parsed_generation_params.prompt),
+            positive_prompt: (parsed_generation_params.positive_prompt || parsed_generation_params.prompt || "(empty)").substring(0, 50) + "...",
+            has_negative_prompt: !!parsed_generation_params.negative_prompt,
+            negative_prompt: (parsed_generation_params.negative_prompt || "(empty)").substring(0, 30) + "...",
+            checkpoint: parsed_generation_params.checkpoint_name || parsed_generation_params.sd_checkpoint || "(none)",
+            steps: parsed_generation_params.steps || 20,
+            cfg_scale: parsed_generation_params.cfg_scale || 7.0,
+            size: `${parsed_generation_params.width || 512}x${parsed_generation_params.height || 512}`
         }));
         
         // Ensure positive_prompt is at least an empty string, not undefined
-        if (generation_params.positive_prompt === undefined) {
+        if (parsed_generation_params.positive_prompt === undefined) {
             // Check for 'prompt' field which may be used instead of 'positive_prompt'
-            if (generation_params.prompt !== undefined) {
-                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using 'prompt' field as positive_prompt: "${generation_params.prompt}"`);
-                generation_params.positive_prompt = generation_params.prompt;
+            if (parsed_generation_params.prompt !== undefined) {
+                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using 'prompt' field as positive_prompt`);
+                parsed_generation_params.positive_prompt = parsed_generation_params.prompt;
             } else {
                 console.warn(`[Dispatcher] Job ${mobilesd_job_id}: positive_prompt is undefined, setting to empty string`);
-                generation_params.positive_prompt = "";
+                parsed_generation_params.positive_prompt = "";
             }
         }
         
         // Ensure negative_prompt is at least an empty string, not undefined
-        if (generation_params.negative_prompt === undefined) {
+        if (parsed_generation_params.negative_prompt === undefined) {
             console.warn(`[Dispatcher] Job ${mobilesd_job_id}: negative_prompt is undefined, setting to empty string`);
-            generation_params.negative_prompt = "";
+            parsed_generation_params.negative_prompt = "";
         }
     } catch (e) {
-        console.error(`[Dispatcher] Job ${mobilesd_job_id}: Failed to parse generation_params_json. Error: ${e.message}`);
-        await jobQueue.updateJob(mobilesd_job_id, { status: 'failed', result_details_json: JSON.stringify({ error: 'Invalid generation_params JSON format.', details: e.message }) });
+        console.error(`[Dispatcher] Job ${mobilesd_job_id}: Failed to parse generation parameters. Error: ${e.message}`);
+        await jobQueue.updateJob(mobilesd_job_id, { status: 'failed', result_details_json: JSON.stringify({ error: 'Invalid generation parameters format.', details: e.message }) });
         return;
     }
 
     // Dynamically get server details based on target_server_alias
     let serverDetails;
     try {
-        const servers = await readServersConfig(); // Ensure readServersConfig is async or handle accordingly
+        const servers = await readServersConfig();
         serverDetails = servers.find(s => s.alias === target_server_alias);
 
         if (!serverDetails) {
@@ -515,41 +529,22 @@ async function processJob(job) {
     const forgeBaseUrl = serverDetails.apiUrl;
     console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using Forge server URL ${forgeBaseUrl} for alias '${target_server_alias}'.`);
 
-    // Extended checkpoint parameter handling with detailed logging
-    console.log(`[Dispatcher] Job ${mobilesd_job_id}: Examining generation parameters for checkpoint information:`, JSON.stringify({
-        has_checkpoint_name: !!generation_params.checkpoint_name,
-        has_sd_checkpoint: !!generation_params.sd_checkpoint,
-        checkpoint_name_value: generation_params.checkpoint_name,
-        sd_checkpoint_value: generation_params.sd_checkpoint
-    }));
-
     // Check for checkpoint name in either parameter format for backward compatibility
-    let checkpoint_name = generation_params.checkpoint_name;
-    if (!checkpoint_name && generation_params.sd_checkpoint) {
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using sd_checkpoint parameter as checkpoint_name: "${generation_params.sd_checkpoint}"`);
-        checkpoint_name = generation_params.sd_checkpoint;
-        // Add it to generation_params for consistent usage throughout the function
-        generation_params.checkpoint_name = checkpoint_name;
+    let checkpoint_name = parsed_generation_params.checkpoint_name;
+    if (!checkpoint_name && parsed_generation_params.sd_checkpoint) {
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using sd_checkpoint parameter as checkpoint_name: "${parsed_generation_params.sd_checkpoint}"`);
+        checkpoint_name = parsed_generation_params.sd_checkpoint;
+        parsed_generation_params.checkpoint_name = checkpoint_name;
     }
     
     if (!checkpoint_name) {
         console.log(`[Dispatcher] Job ${mobilesd_job_id}: No checkpoint specified, will use current model on target server.`);
-        checkpoint_name = null; // This will skip checkpoint switching
+        checkpoint_name = null;
     }
 
     console.log(`[Dispatcher] Job ${mobilesd_job_id}: Confirmed checkpoint to use: "${checkpoint_name}"`);
     
-    // Store the original checkpoint name before any path modifications
-    const original_checkpoint_name = checkpoint_name;
-    
-    // Check if we need to prepend model root path - only for local path checking
-    let full_local_path = checkpoint_name;
-    let isWindowsServer = false; // Default to false (Linux-style paths)
-    
-    const forge_session_hash = uuidv4();
-    const forgeInternalTaskId = `task(${uuidv4().replace(/-/g, "")})`; 
-
-    const axiosConfig = { timeout: 30000 };
+    const axiosConfig = { timeout: 60000 }; // 60 second timeout for generation
     if (serverDetails.username && serverDetails.password) {
         axiosConfig.auth = {
             username: serverDetails.username,
@@ -559,114 +554,81 @@ async function processJob(job) {
     }
 
     try {
-        // Debug: Check if API endpoints exist before using them
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Testing API endpoint availability on ${forgeBaseUrl}...`);
-        try {
-            const testResponse = await axios.get(`${forgeBaseUrl}/sdapi/v1/samplers`, axiosConfig);
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: API test successful, found ${testResponse.data.length} samplers`);
-        } catch (testError) {
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: API test failed for /sdapi/v1/samplers: ${testError.message}`);
-            // Try alternative API path format
-            try {
-                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Trying alternative API path /api/sdapi/v1/samplers...`);
-                const altTestResponse = await axios.get(`${forgeBaseUrl}/api/sdapi/v1/samplers`, axiosConfig);
-                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Alternative API path successful, found ${altTestResponse.data.length} samplers`);
-                // If alternative path works, modify forgeBaseUrl to use this path
-                forgeBaseUrl = `${forgeBaseUrl}/api`;
-                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Updated forgeBaseUrl to ${forgeBaseUrl}`);
-            } catch (altTestError) {
-                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Alternative API path also failed: ${altTestError.message}`);
-                
-                // Try another alternative format
-                try {
-                    console.log(`[Dispatcher] Job ${mobilesd_job_id}: Trying alternative API path /internal/api/samplers...`);
-                    const alt2TestResponse = await axios.get(`${forgeBaseUrl}/internal/api/samplers`, axiosConfig);
-                    console.log(`[Dispatcher] Job ${mobilesd_job_id}: Alternative internal API path successful, found samplers`);
-                    // If alternative path works, modify forgeBaseUrl to use this path
-                    forgeBaseUrl = `${forgeBaseUrl}/internal/api`;
-                    console.log(`[Dispatcher] Job ${mobilesd_job_id}: Updated forgeBaseUrl to ${forgeBaseUrl}`);
-                } catch (alt2TestError) {
-                    console.log(`[Dispatcher] Job ${mobilesd_job_id}: All API path tests failed. Your Forge server may have a custom API structure.`);
-                }
-            }
-        }
+        // **FORCE REST API APPROACH - ALWAYS USE /sdapi/v1/txt2img**
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using REST API approach with /sdapi/v1/txt2img (Gradio interface disabled)`);
         
-        // APPROACH 1: Set the active checkpoint using the /sdapi/v1/options endpoint (if checkpoint specified and REST API available)
-        let normalizedCheckpoint = null;
-        if (original_checkpoint_name) {
-            const optionsPayload = {
-                sd_model_checkpoint: original_checkpoint_name
-            };
-            
-            // Normalize checkpoint path - default to forward slashes
-            normalizedCheckpoint = original_checkpoint_name.replace(/\\/g, '/');
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Original checkpoint path: '${original_checkpoint_name}', normalized to: '${normalizedCheckpoint}' (assuming Linux/forward-slash paths).`);
-            
-            // Use the normalized path
-            optionsPayload.sd_model_checkpoint = normalizedCheckpoint;
-            
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Attempting to set active checkpoint to '${normalizedCheckpoint}' using /sdapi/v1/options API...`);
-            try {
-                await axios.post(`${forgeBaseUrl}/sdapi/v1/options`, optionsPayload, axiosConfig);
-                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Active checkpoint set successfully via REST API.`);
-            } catch (restApiError) {
-                console.warn(`[Dispatcher] Job ${mobilesd_job_id}: REST API checkpoint setting failed (${restApiError.response?.status}). This is okay - checkpoint will be handled via Gradio override_settings.`);
-                // Don't fail the job - checkpoint can be set via Gradio override_settings
-            }
-        } else {
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Skipping checkpoint switch - will use current model on target server.`);
-        }
-        
-        // APPROACH 2: Also include the checkpoint in the override_settings for the txt2img request (if specified)
-        if (normalizedCheckpoint) {
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Preparing generation request with override_settings for checkpoint '${normalizedCheckpoint}'`);
-        } else {
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Preparing generation request using current server model (no checkpoint override).`);
-        }
-        
-        // Construct generation data array for Gradio API
-        const generationDataArray = constructGenerationPayloadData(generation_params, forgeInternalTaskId, false);
-        
-        // Create the generation payload for the Gradio API
-        const generationPayload = {
-            data: generationDataArray,
-            event_data: null,
-            fn_index: 257, 
-            session_hash: forge_session_hash,
-            trigger_id: 16
+        // Prepare the payload for the Forge txt2img API
+        const txt2imgPayload = {
+            prompt: parsed_generation_params.positive_prompt || parsed_generation_params.prompt || "",
+            negative_prompt: parsed_generation_params.negative_prompt || "",
+            steps: parsed_generation_params.steps || 20,
+            sampler_name: parsed_generation_params.sampler_name || parsed_generation_params.sampler || "Euler a",
+            cfg_scale: parsed_generation_params.cfg_scale || 7.0,
+            width: parsed_generation_params.width || 512,
+            height: parsed_generation_params.height || 512,
+            seed: parsed_generation_params.seed || -1,
+            batch_size: parsed_generation_params.batch_size || 1,
+            n_iter: parsed_generation_params.n_iter || 1,
+            restore_faces: parsed_generation_params.restore_faces || false,
+            tiling: parsed_generation_params.tiling || false,
+            send_images: false,  // Don't send images in response to reduce payload size
+            save_images: true,   // Save images to disk
+            override_settings: {}
         };
         
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Submitting generation task with internal_task_id '${forgeInternalTaskId}'...`);
-        await axios.post(`${forgeBaseUrl}/queue/join`, generationPayload, axiosConfig);
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Generation task submitted successfully to queue.`);
+        // Add checkpoint override if specified
+        if (checkpoint_name) {
+            const normalizedCheckpoint = checkpoint_name.replace(/\\/g, '/');
+            txt2imgPayload.override_settings.sd_model_checkpoint = normalizedCheckpoint;
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Added checkpoint override: ${normalizedCheckpoint}`);
+        }
         
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Submitting to /sdapi/v1/txt2img with payload:`, {
+            prompt: txt2imgPayload.prompt.substring(0, 50) + "...",
+            steps: txt2imgPayload.steps,
+            size: `${txt2imgPayload.width}x${txt2imgPayload.height}`,
+            sampler: txt2imgPayload.sampler_name,
+            cfg_scale: txt2imgPayload.cfg_scale
+        });
+        
+        // Submit to the txt2img API endpoint (this will be synchronous and block until complete)
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Starting synchronous generation via REST API...`);
+        const txt2imgResponse = await axios.post(`${forgeBaseUrl}/sdapi/v1/txt2img`, txt2imgPayload, axiosConfig);
+        
+        // Process the response immediately since it's synchronous
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Generation completed successfully. Processing response...`);
+        const responseData = txt2imgResponse.data;
+        
+        let resultInfo = {};
+        if (responseData.info) {
+            try {
+                resultInfo = JSON.parse(responseData.info);
+                console.log(`[Dispatcher] Job ${mobilesd_job_id}: Parsed generation info successfully`);
+            } catch (parseError) {
+                console.error(`[Dispatcher] Job ${mobilesd_job_id}: Failed to parse response info:`, parseError);
+                resultInfo = { raw_info: responseData.info, parse_error: parseError.message };
+            }
+        }
+        
+        // Update job to completed status immediately
         await jobQueue.updateJob(mobilesd_job_id, {
-            status: 'processing',
-            forge_session_hash: forge_session_hash,
+            status: 'completed',
             processing_started_at: new Date().toISOString(),
-            forge_internal_task_id: forgeInternalTaskId,
-            result_details: { 
-                forge_internal_task_id: forgeInternalTaskId,
-                message: "Job dispatched to Forge.",
-                submission_type: "queue/join",
-                positive_prompt: generation_params.positive_prompt || generation_params.prompt || "",
-                negative_prompt: generation_params.negative_prompt || ""
+            completion_timestamp: new Date().toISOString(),
+            result_details: {
+                message: "Job completed successfully via REST API.",
+                submission_type: "sdapi_txt2img",
+                generation_info: resultInfo,
+                positive_prompt: parsed_generation_params.positive_prompt || parsed_generation_params.prompt || "",
+                negative_prompt: parsed_generation_params.negative_prompt || ""
             }
         });
-        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Status updated to 'processing', forge_session_hash: ${forge_session_hash}, forge_internal_task_id: ${forgeInternalTaskId}.`);
-
-        // Start monitoring the job after it's set to 'processing'
-        try {
-            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Starting monitoring via forgeJobMonitor.`);
-            await forgeJobMonitor.startMonitoringJob(mobilesd_job_id);
-        } catch (monitoringError) {
-            console.error(`[Dispatcher] Job ${mobilesd_job_id}: Error starting job monitoring: ${monitoringError.message}`);
-            // Don't fail the job just because monitoring setup failed
-            // The job is still processing on Forge, and we've logged the issue
-        }
+        
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Job marked as completed via REST API.`);
+        return; // Exit successfully
 
     } catch (error) {
-        console.error(`[Dispatcher] Job ${mobilesd_job_id}: Error during Forge interaction with ${forgeBaseUrl}. ${error.message}`);
+        console.error(`[Dispatcher] Job ${mobilesd_job_id}: Error during REST API interaction with ${forgeBaseUrl}. ${error.message}`);
         let errorResponseData = null;
         if (error.response) {
             console.error(`[Dispatcher] Job ${mobilesd_job_id}: Error status: ${error.response.status}, data: ${JSON.stringify(error.response.data)}`);
@@ -677,7 +639,7 @@ async function processJob(job) {
         await jobQueue.updateJob(mobilesd_job_id, {
             status: 'failed',
             result_details_json: JSON.stringify({
-                error: `Forge interaction failed: ${error.message}`,
+                error: `REST API interaction failed: ${error.message}`,
                 details: errorResponseData || String(error.stack)
             }),
         });
@@ -735,8 +697,148 @@ function stopDispatcher() {
     console.log('[Dispatcher] Stop: Dispatcher service has been signaled to stop.');
 }
 
+async function submitJobToForge(mobilesd_job_id, generation_params, target_server_alias, parsed_server_details) {
+    const { serverDetails, forgeBaseUrl } = parsed_server_details;
+    const checkpoint_name = generation_params.checkpoint;
+    
+    const forge_session_hash = uuidv4();
+    const forgeInternalTaskId = `task(${uuidv4().replace(/-/g, "")})`; 
+
+    const axiosConfig = { timeout: 30000 };
+    if (serverDetails.username && serverDetails.password) {
+        axiosConfig.auth = {
+            username: serverDetails.username,
+            password: serverDetails.password,
+        };
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using basic authentication for server '${target_server_alias}'.`);
+    }
+
+    try {
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Using simple paste approach instead of direct fn_index call`);
+        
+        // Reconstruct the generation info string from parameters
+        const generationInfo = reconstructGenerationInfo(generation_params);
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Reconstructed generation info: ${generationInfo.slice(0, 100)}...`);
+        
+        // Step 1: Put the generation info in the prompt textarea
+        const promptPayload = {
+            data: [generationInfo],
+            event_data: null,
+            fn_index: null, // Will be determined by targeting the right component
+            session_hash: forge_session_hash,
+            component_id: "txt2img_prompt"  // Target the prompt textarea directly
+        };
+        
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Step 1 - Setting prompt with generation info...`);
+        await axios.post(`${forgeBaseUrl}/queue/join`, promptPayload, axiosConfig);
+        
+        // Step 2: Trigger the paste button to parse the generation info
+        const pastePayload = {
+            data: [],
+            event_data: null,
+            fn_index: null,
+            session_hash: forge_session_hash,
+            component_id: "paste"  // Target the paste button
+        };
+        
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Step 2 - Triggering paste to parse generation info...`);
+        await axios.post(`${forgeBaseUrl}/queue/join`, pastePayload, axiosConfig);
+        
+        // Step 3: Find and trigger the generate button
+        const generatePayload = {
+            data: [],
+            event_data: null,
+            fn_index: null,
+            session_hash: forge_session_hash,
+            component_id: "txt2img_generate"  // Target the generate button
+        };
+        
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Step 3 - Triggering generation...`);
+        await axios.post(`${forgeBaseUrl}/queue/join`, generatePayload, axiosConfig);
+        
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Generation task submitted successfully using paste approach.`);
+        
+        await jobQueue.updateJob(mobilesd_job_id, {
+            status: 'processing',
+            forge_session_hash: forge_session_hash,
+            processing_started_at: new Date().toISOString(),
+            forge_internal_task_id: forgeInternalTaskId,
+            result_details: { 
+                forge_internal_task_id: forgeInternalTaskId,
+                message: "Job dispatched to Forge using paste approach.",
+                submission_type: "paste_and_generate",
+                positive_prompt: generation_params.positive_prompt || generation_params.prompt || "",
+                negative_prompt: generation_params.negative_prompt || ""
+            }
+        });
+        console.log(`[Dispatcher] Job ${mobilesd_job_id}: Status updated to 'processing', forge_session_hash: ${forge_session_hash}, forge_internal_task_id: ${forgeInternalTaskId}.`);
+
+        // Start monitoring the job after it's set to 'processing'
+        try {
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Starting monitoring via forgeJobMonitor.`);
+            await forgeJobMonitor.startMonitoringJob(mobilesd_job_id);
+        } catch (monitoringError) {
+            console.error(`[Dispatcher] Job ${mobilesd_job_id}: Error starting job monitoring: ${monitoringError.message}`);
+        }
+
+    } catch (error) {
+        console.error(`[Dispatcher] Job ${mobilesd_job_id}: Error during Forge interaction with ${forgeBaseUrl}. ${error.message}`);
+        let errorResponseData = null;
+        if (error.response) {
+            console.error(`[Dispatcher] Job ${mobilesd_job_id}: Error status: ${error.response.status}, data: ${JSON.stringify(error.response.data)}`);
+            errorResponseData = error.response.data;
+        } else {
+            console.error(`[Dispatcher] Job ${mobilesd_job_id}: No error response object. Error details: ${error}`);
+        }
+        await jobQueue.updateJob(mobilesd_job_id, {
+            status: 'failed',
+            result_details_json: JSON.stringify({
+                error: `Forge interaction failed: ${error.message}`,
+                details: errorResponseData || String(error.stack)
+            }),
+        });
+    }
+}
+
+function reconstructGenerationInfo(params) {
+    // Reconstruct the generation info string in the same format that CivitAI images use
+    let genInfo = '';
+    
+    if (params.positive_prompt || params.prompt) {
+        genInfo += params.positive_prompt || params.prompt;
+    }
+    
+    if (params.negative_prompt) {
+        genInfo += `\nNegative prompt: ${params.negative_prompt}`;
+    }
+    
+    // Add parameters in the standard format
+    const paramParts = [];
+    
+    if (params.steps) paramParts.push(`Steps: ${params.steps}`);
+    if (params.sampler) paramParts.push(`Sampler: ${params.sampler}`);
+    if (params.cfg_scale) paramParts.push(`CFG scale: ${params.cfg_scale}`);
+    if (params.seed) paramParts.push(`Seed: ${params.seed}`);
+    if (params.size) {
+        const [width, height] = params.size.split('x');
+        paramParts.push(`Size: ${width}x${height}`);
+    } else if (params.width && params.height) {
+        paramParts.push(`Size: ${params.width}x${params.height}`);
+    }
+    if (params.checkpoint) paramParts.push(`Model: ${params.checkpoint}`);
+    if (params.denoising_strength) paramParts.push(`Denoising strength: ${params.denoising_strength}`);
+    if (params.hires_scale && params.hires_scale !== 1) paramParts.push(`Hires upscale: ${params.hires_scale}`);
+    
+    if (paramParts.length > 0) {
+        genInfo += `\n${paramParts.join(', ')}`;
+    }
+    
+    return genInfo;
+}
+
 module.exports = {
     startDispatcher,
     stopDispatcher,
+    processJob,
     _constructGenerationPayloadData: constructGenerationPayloadData 
 }; 
