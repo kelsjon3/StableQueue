@@ -27,28 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const queueEmpty = document.getElementById('queue-empty');
     const refreshQueueBtn = document.getElementById('refresh-queue-btn');
     const queueStatusFilter = document.getElementById('queue-status-filter');
-    const jobDetailsModal = document.getElementById('job-details-modal');Research how to programmatically capture complete image generation parameters from within a Stable Diffusion Forge WebUI extension built on Gradio framework
-    I'm developing a Forge WebUI extension that needs to capture ALL generation parameters (including extension data like ControlNet, IP-Adapter, Regional Prompts) and send them to a remote queue system without triggering local generation.
-    Technical Architecture:
-    Stable Diffusion Forge WebUI - A1111 fork with enhanced features
-    Gradio framework - The entire WebUI is built on Gradio (gr.Textbox, gr.Slider, gr.Dropdown, etc.)
-    Forge extension system - Python backend + JavaScript frontend
-    Extensions ecosystem - ControlNet, IP-Adapter, Regional Prompts, Forge Couple, etc.
-    FastAPI integration - Forge exposes /sdapi/v1/ endpoints when --api flag is used
-    Core Challenge:
-    Need to programmatically extract the complete parameter set that Forge would use for generation, including:
-    Basic parameters (prompt, steps, CFG, sampler, etc.)
-    All active extension configurations and their current UI states
-    Model selections, LoRA settings, and other advanced options
-    Research Focus:
-    Gradio component state access - How to read values from gr.Textbox, gr.Slider, gr.Dropdown components programmatically
-    Gradio Blocks traversal - Navigating nested Gradio layouts (tabs, accordions, extension panels)
-    Forge extension hooks - APIs for accessing extension states (ControlNet models, IP-Adapter settings)
-    Gradio event interception - Capturing UI state without triggering generation
-    Extension parameter serialization - How extensions store and expose their configurations
-    Forge internal APIs - Accessing current model, sampler, and other global settings
-    Goal: Capture the exact same parameter set that Forge uses internally when the Generate button is clicked, but without triggering actual generation.
-    This covers all the key technical details and should give much more targeted research results!
+    const jobDetailsModal = document.getElementById('job-details-modal');
     const jobDetailsContent = document.getElementById('job-details-content');
     const cancelJobBtn = document.getElementById('cancel-job-btn');
     const deleteJobBtn = document.getElementById('delete-job-btn');
