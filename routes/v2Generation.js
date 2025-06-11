@@ -159,6 +159,7 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
         app_type,
         target_server_alias, 
         generation_params,
+        generation_info_raw,
         priority,
         source_info
     } = req.body;
@@ -174,10 +175,14 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
         });
     }
 
-    if (!generation_params || typeof generation_params !== 'object' || Object.keys(generation_params).length === 0) {
+    // Check if we have either generation_params or generation_info_raw
+    if (generation_info_raw && typeof generation_info_raw === 'string' && generation_info_raw.trim()) {
+        console.log("[API v2] Received raw generation info, will process later");
+        // Raw generation info will be processed by the backend
+    } else if (!generation_params || typeof generation_params !== 'object' || Object.keys(generation_params).length === 0) {
         return handleApiError(res, 'INVALID_FIELD_VALUE', req, {
             field: 'generation_params',
-            customMessage: 'Invalid or empty generation_params object provided'
+            customMessage: 'Either generation_params object or generation_info_raw string is required'
         });
     }
 
@@ -186,20 +191,28 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
     
     // Process generation payloads from extensions
     let processedParams;
-    try {
-        processedParams = processGenerationPayload(generation_params);
-    } catch (error) {
-        console.error(`[API v2] Error processing generation payload:`, error);
-        return handleApiError(res, 'INVALID_FIELD_VALUE', req, {
-            field: 'generation_params',
-            customMessage: `Failed to process generation parameters: ${error.message}`
-        });
+    let isRawGenerationInfo = false;
+    
+    if (generation_info_raw && typeof generation_info_raw === 'string' && generation_info_raw.trim()) {
+        console.log("[API v2] Using raw generation info - will be parsed by backend");
+        processedParams = { raw_generation_info: generation_info_raw.trim() };
+        isRawGenerationInfo = true;
+    } else {
+        try {
+            processedParams = processGenerationPayload(generation_params);
+        } catch (error) {
+            console.error(`[API v2] Error processing generation payload:`, error);
+            return handleApiError(res, 'INVALID_FIELD_VALUE', req, {
+                field: 'generation_params',
+                customMessage: `Failed to process generation parameters: ${error.message}`
+            });
+        }
     }
     
-    // More robust checkpoint parameter normalization
+    // More robust checkpoint parameter normalization (skip for raw generation info)
     console.log(`[API v2] Checking generation parameters for app_type: ${validAppType}`);
     
-    if (processedParams.checkpoint_name && validAppType === 'forge') {
+    if (!isRawGenerationInfo && processedParams.checkpoint_name && validAppType === 'forge') {
         // Normalize checkpoint paths for Forge
         console.log(`[API v2] Normalizing checkpoint path: ${processedParams.checkpoint_name}`);
         try {
