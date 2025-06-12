@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const jobQueue = require('../utils/jobQueueHelpers');
-const { readServersConfig } = require('../utils/configHelpers');
+const { readServersConfig, isQueueProcessingEnabled } = require('../utils/configHelpers');
 const fs = require('fs');
 const path = require('path');
 
@@ -417,18 +417,26 @@ async function pollForJobs() {
         console.log('[Dispatcher] Poll: Stop signal received, not polling.');
         return;
     }
+    
     try {
-        // Get recent pending jobs only (created within the last 24 hours)
-        const oneDayAgo = new Date();
-        oneDayAgo.setDate(oneDayAgo.getDate() - 1);
-        const oneDayAgoISOString = oneDayAgo.toISOString();
+        // Check if queue processing is enabled
+        const queueEnabled = await isQueueProcessingEnabled();
+        if (!queueEnabled) {
+            // Queue processing is disabled, skip this poll cycle
+            // console.log('[Dispatcher] Poll: Queue processing is disabled, skipping poll cycle.');
+        } else {
+            // Get recent pending jobs only (created within the last 24 hours)
+            const oneDayAgo = new Date();
+            oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+            const oneDayAgoISOString = oneDayAgo.toISOString();
 
-        const pendingJobs = await jobQueue.findPendingJobs(1, oneDayAgoISOString); 
-        
-        if (pendingJobs && pendingJobs.length > 0) {
-            const jobToProcess = pendingJobs[0];
-            console.log(`[Dispatcher] Poll: Found pending job ${jobToProcess.mobilesd_job_id}. Attempting to process.`);
-            await processJob(jobToProcess); 
+            const pendingJobs = await jobQueue.findPendingJobs(1, oneDayAgoISOString); 
+            
+            if (pendingJobs && pendingJobs.length > 0) {
+                const jobToProcess = pendingJobs[0];
+                console.log(`[Dispatcher] Poll: Found pending job ${jobToProcess.mobilesd_job_id}. Attempting to process.`);
+                await processJob(jobToProcess); 
+            }
         }
     } catch (error) {
         console.error('[Dispatcher] Poll: Error during job polling or processing initiation:', error);
