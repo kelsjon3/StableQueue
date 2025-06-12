@@ -1169,9 +1169,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json();
             console.log(`Job ${jobId} dispatched successfully:`, result);
             
-            // Show success message
-            alert(`Job ${jobId} has been dispatched to Forge successfully!`);
-            
             // Refresh the queue to show updated status
             await loadQueueJobs();
             
