@@ -27,6 +27,14 @@
             <h2>Job Queue</h2>
             
             <div id="queue-controls" class="card">
+                <div class="queue-processing-control">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="queue-processing-toggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <label for="queue-processing-toggle" class="toggle-label">Queue Processing</label>
+                    <span id="queue-processing-status" class="status-indicator">Enabled</span>
+                </div>
                 <button id="refresh-queue-btn" class="secondary-button">Refresh Queue</button>
                 <div class="queue-filter">
                     <label for="queue-status-filter">Status:</label>

@@ -7,7 +7,7 @@ const path = require('path');
 
 const router = express.Router();
 
-// POST /api/v1/generate - Refactored to add job to SQLite queue
+// POST /api/v1/generate - Add job to SQLite queue
 router.post('/generate', async (req, res) => {
     console.log("Received POST /api/v1/generate request");
     const { target_server_alias, generation_params } = req.body;
@@ -30,17 +30,15 @@ router.post('/generate', async (req, res) => {
     if (!generation_params.checkpoint_name && generation_params.sd_checkpoint) {
         console.log(`Converting sd_checkpoint parameter to checkpoint_name: ${generation_params.sd_checkpoint}`);
         generation_params.checkpoint_name = generation_params.sd_checkpoint;
-        // Keep sd_checkpoint for backward compatibility
     } else if (!generation_params.checkpoint_name && !generation_params.sd_checkpoint) {
         console.error('No checkpoint parameter found in request!');
         return res.status(400).json({ error: 'Missing checkpoint parameter. Please provide checkpoint_name in generation parameters.' });
     }
 
-    // Verify we have a checkpoint_name now
     console.log(`Using checkpoint_name: ${generation_params.checkpoint_name}`);
 
     try {
-        const servers = await readServersConfig(); // Keep server validation
+        const servers = await readServersConfig();
         if (!servers.find(s => s.alias === target_server_alias)) {
             return res.status(404).json({ error: `Server with alias '${target_server_alias}' not found.` });
         }
@@ -50,13 +48,12 @@ router.post('/generate', async (req, res) => {
     }
 
     try {
-        // jobQueue.addJob now handles ID, timestamps, and initial status
         const jobDataForQueue = {
             target_server_alias,
             generation_params 
         };
         console.log(`Attempting to add job to queue for server ${target_server_alias} with params:`, generation_params);
-        const newJobRecord = jobQueue.addJob(jobDataForQueue); // This is now a synchronous call if using better-sqlite3 directly
+        const newJobRecord = jobQueue.addJob(jobDataForQueue);
         
         console.log(`Job ${newJobRecord.mobilesd_job_id} added successfully to SQLite queue.`);
         res.status(202).json({ mobilesd_job_id: newJobRecord.mobilesd_job_id });
@@ -463,6 +460,62 @@ router.post('/checkpoint-verify', async (req, res) => {
             success: false, 
             error: `Checkpoint verification failed: ${error.message}` 
         });
+    }
+});
+
+// POST /api/v1/queue/jobs/:jobId/dispatch - Manually dispatch a specific job to Forge
+router.post('/queue/jobs/:jobId/dispatch', async (req, res) => {
+    const { jobId } = req.params;
+    console.log(`[API] Received POST /api/v1/queue/jobs/${jobId}/dispatch request (manual dispatch)`);
+    
+    if (!jobId) {
+        return res.status(400).json({ error: 'Job ID is required.' });
+    }
+    
+    try {
+        // First check if the job exists and get its current status
+        const job = jobQueue.getJobById(jobId);
+        
+        if (!job) {
+            return res.status(404).json({ error: `Job with ID '${jobId}' not found.` });
+        }
+        
+        // Allow pending and failed jobs to be manually dispatched
+        if (job.status !== 'pending' && job.status !== 'failed') {
+            return res.status(400).json({ 
+                error: `Cannot dispatch job with status '${job.status}'. Only 'pending' and 'failed' jobs can be dispatched.`,
+                job: job
+            });
+        }
+        
+        // Import the dispatcher and process this specific job
+        const dispatcher = require('../services/gradioJobDispatcher');
+        
+        console.log(`[API] Manual dispatch: Processing job ${jobId}`);
+        
+        // We need to create a job object that matches what the dispatcher expects
+        const jobForDispatcher = {
+            mobilesd_job_id: job.mobilesd_job_id,
+            status: job.status,
+            target_server_alias: job.target_server_alias,
+            generation_params: job.generation_params,
+            app_type: job.app_type || 'forge'
+        };
+        
+        // Call the processJob function directly (this is typically called by the dispatcher)
+        await dispatcher.processJob(jobForDispatcher);
+        
+        // Get the updated job status after processing
+        const updatedJob = jobQueue.getJobById(jobId);
+        
+        res.status(200).json({
+            message: 'Job dispatched successfully.',
+            job: updatedJob
+        });
+        
+    } catch (error) {
+        console.error(`[API] Error manually dispatching job ${jobId}:`, error);
+        res.status(500).json({ error: `Failed to dispatch job: ${error.message}` });
     }
 });
 

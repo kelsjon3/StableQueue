@@ -13,6 +13,15 @@ const getConfigFilePath = () => {
   return path.join(configDataPath, 'servers.json');
 };
 
+// Helper function to get the path to app-settings.json
+const getAppSettingsFilePath = () => {
+  const configDataPath = process.env.CONFIG_DATA_PATH;
+  if (!configDataPath) {
+    return path.join(__dirname, '../data/app-settings.json');
+  }
+  return path.join(configDataPath, 'app-settings.json');
+};
+
 // Helper function to read server configurations
 const readServersConfig = async () => {
   const filePath = getConfigFilePath();
@@ -147,6 +156,66 @@ const initializeDataDirectory = async () => {
   }
 };
 
+// Helper function to read app settings
+const readAppSettings = async () => {
+  const filePath = getAppSettingsFilePath();
+  try {
+    await fs.access(filePath); // Check if file exists
+    const data = await fs.readFile(filePath, 'utf-8');
+    return JSON.parse(data);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      console.log('app-settings.json not found, returning default settings.');
+      // Return default settings
+      const defaultSettings = {
+        queueProcessingEnabled: true,
+        lastUpdated: new Date().toISOString()
+      };
+      await writeAppSettings(defaultSettings); // Create the file with defaults
+      return defaultSettings;
+    }
+    console.error('Error reading app settings:', error);
+    throw error;
+  }
+};
+
+// Helper function to write app settings
+const writeAppSettings = async (settings) => {
+  const filePath = getAppSettingsFilePath();
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    // Add lastUpdated timestamp
+    const settingsWithTimestamp = {
+      ...settings,
+      lastUpdated: new Date().toISOString()
+    };
+    await fs.writeFile(filePath, JSON.stringify(settingsWithTimestamp, null, 2), 'utf-8');
+    console.log(`[Settings] App settings updated: queueProcessingEnabled=${settingsWithTimestamp.queueProcessingEnabled}`);
+  } catch (error) {
+    console.error('Error writing app settings:', error);
+    throw error;
+  }
+};
+
+// Helper function to update specific app setting
+const updateAppSetting = async (key, value) => {
+  const currentSettings = await readAppSettings();
+  currentSettings[key] = value;
+  await writeAppSettings(currentSettings);
+  return currentSettings;
+};
+
+// Helper function to check if queue processing is enabled
+const isQueueProcessingEnabled = async () => {
+  try {
+    const settings = await readAppSettings();
+    return settings.queueProcessingEnabled !== false; // Default to true if not set
+  } catch (error) {
+    console.error('Error checking queue processing status:', error);
+    return true; // Default to enabled on error
+  }
+};
+
 // --- Exports --- 
 
 module.exports = {
@@ -157,4 +226,8 @@ module.exports = {
   getServerByAlias,
   getAxiosConfig,
   initializeDataDirectory,
+  readAppSettings,
+  writeAppSettings,
+  updateAppSetting,
+  isQueueProcessingEnabled,
 }; 

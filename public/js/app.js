@@ -496,6 +496,9 @@ document.addEventListener('DOMContentLoaded', () => {
     navServerSetup.addEventListener('click', () => showView(serverSetupView, navServerSetup));
     navApiKeys.addEventListener('click', () => showView(apiKeysView, navApiKeys));
 
+    // Queue processing toggle functionality
+    initializeQueueProcessingToggle();
+
     // Initialize the app
     initializeJobClient();
     // Start on queue view by default
@@ -603,6 +606,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="queue-job-actions">
                         <button class="secondary-button view-details-btn" data-job-id="${job.mobilesd_job_id}">Details</button>
                         <button class="secondary-button view-params-btn" data-job-id="${job.mobilesd_job_id}">Generation Parameters</button>
+                        ${job.status === 'pending' || job.status === 'failed' ? 
+                            `<button class="primary-button run-job-btn" data-job-id="${job.mobilesd_job_id}">Run Job</button>` : 
+                            ''}
                         ${job.status === 'pending' || job.status === 'processing' ? 
                             `<button class="danger-button cancel-job-btn" data-job-id="${job.mobilesd_job_id}">Cancel</button>` : 
                             ''}
@@ -624,6 +630,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.stopPropagation();
                 const jobId = btn.getAttribute('data-job-id');
                 showJobParameters(jobId);
+            });
+        });
+        
+        // Add event listeners for the Run Job buttons
+        document.querySelectorAll('.run-job-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const jobId = btn.getAttribute('data-job-id');
+                runJob(jobId, btn);
             });
         });
     }
@@ -868,4 +883,142 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     });
+
+    // Queue Processing Toggle Functions
+    function initializeQueueProcessingToggle() {
+        const toggle = document.getElementById('queue-processing-toggle');
+        const statusIndicator = document.getElementById('queue-processing-status');
+        
+        if (!toggle || !statusIndicator) {
+            console.warn('Queue processing toggle elements not found');
+            return;
+        }
+
+        // Load current settings
+        loadQueueProcessingStatus();
+
+        // Add event listener for toggle changes
+        toggle.addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            
+            try {
+                const response = await fetch('/api/v1/settings/queue-processing', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ enabled })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateToggleStatus(enabled);
+                    console.log(`Queue processing ${enabled ? 'enabled' : 'disabled'}`);
+                } else {
+                    throw new Error(result.error || 'Failed to update setting');
+                }
+            } catch (error) {
+                console.error('Error toggling queue processing:', error);
+                alert('Failed to update queue processing setting');
+                // Revert toggle state
+                e.target.checked = !enabled;
+            }
+        });
+    }
+
+    async function loadQueueProcessingStatus() {
+        try {
+            const response = await fetch('/api/v1/settings');
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            if (result.success && result.settings) {
+                const enabled = result.settings.queueProcessingEnabled !== false; // Default to true
+                
+                const toggle = document.getElementById('queue-processing-toggle');
+                if (toggle) {
+                    toggle.checked = enabled;
+                    updateToggleStatus(enabled);
+                }
+            }
+        } catch (error) {
+            console.error('Error loading queue processing status:', error);
+            // Default to enabled if we can't load the setting
+            updateToggleStatus(true);
+        }
+    }
+
+    function updateToggleStatus(enabled) {
+        const statusIndicator = document.getElementById('queue-processing-status');
+        
+        if (statusIndicator) {
+            statusIndicator.textContent = enabled ? 'Enabled' : 'Disabled';
+            statusIndicator.className = `status-indicator ${enabled ? 'enabled' : 'disabled'}`;
+        }
+    }
+
+    // Function to manually run a specific job
+    async function runJob(jobId, buttonElement) {
+        if (!jobId) {
+            console.error('Job ID is required to run job');
+            return;
+        }
+        
+        // Provide visual feedback
+        const originalText = buttonElement.textContent;
+        buttonElement.textContent = 'Running...';
+        buttonElement.disabled = true;
+        buttonElement.style.opacity = '0.6';
+        
+        try {
+            console.log(`Manual dispatch: Running job ${jobId}`);
+            
+            const response = await fetch(`/api/v1/queue/jobs/${jobId}/dispatch`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            console.log(`Job ${jobId} dispatched successfully:`, result);
+            
+            // Show success message
+            alert(`Job ${jobId} has been dispatched to Forge successfully!`);
+            
+            // Refresh the queue to show updated status
+            await loadQueueJobs();
+            
+        } catch (error) {
+            console.error(`Error running job ${jobId}:`, error);
+            
+            // Restore button state on error
+            buttonElement.textContent = originalText;
+            buttonElement.disabled = false;
+            buttonElement.style.opacity = '1';
+            
+            // Show detailed error message
+            let errorMessage = `Failed to run job ${jobId}: ${error.message}`;
+            
+            if (error.message.includes('Only \'pending\' and \'failed\' jobs can be dispatched')) {
+                errorMessage += '\n\nThe job may have already been completed or is being processed. Please refresh the queue and try again.';
+            }
+            
+            alert(errorMessage);
+        }
+    }
 });

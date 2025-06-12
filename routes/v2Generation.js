@@ -198,14 +198,14 @@ router.post('/generate', apiAuthWithJobRateLimit, async (req, res) => {
         processedParams = { raw_generation_info: generation_info_raw.trim() };
         isRawGenerationInfo = true;
     } else {
-        try {
-            processedParams = processGenerationPayload(generation_params);
-        } catch (error) {
-            console.error(`[API v2] Error processing generation payload:`, error);
-            return handleApiError(res, 'INVALID_FIELD_VALUE', req, {
-                field: 'generation_params',
-                customMessage: `Failed to process generation parameters: ${error.message}`
-            });
+    try {
+        processedParams = processGenerationPayload(generation_params);
+    } catch (error) {
+        console.error(`[API v2] Error processing generation payload:`, error);
+        return handleApiError(res, 'INVALID_FIELD_VALUE', req, {
+            field: 'generation_params',
+            customMessage: `Failed to process generation parameters: ${error.message}`
+        });
         }
     }
     
