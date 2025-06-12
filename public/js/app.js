@@ -501,6 +501,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize the app
     initializeJobClient();
+    setupGallerySearch();
+    setupGalleryAutoRefresh();
     // Start on queue view by default
     showView(queueView, navQueue);
     
@@ -526,9 +528,179 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // Gallery functionality
     async function fetchAndDisplayImages() {
-        // This function would load images for the gallery view
-        console.log('fetchAndDisplayImages called - gallery functionality not implemented yet');
+        console.log('Fetching and displaying gallery images...');
+        
+        const galleryContainer = document.getElementById('gallery-images');
+        const galleryLoading = document.getElementById('gallery-loading');
+        const galleryEmpty = document.getElementById('gallery-empty');
+        
+        if (!galleryContainer) {
+            console.error('Gallery container not found');
+            return;
+        }
+        
+        // Show loading state
+        galleryLoading.style.display = 'block';
+        galleryEmpty.style.display = 'none';
+        galleryContainer.innerHTML = '';
+        
+        try {
+            const response = await fetch('/api/v1/gallery/images');
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log(`Loaded ${data.total} images from gallery`);
+            
+            // Hide loading state
+            galleryLoading.style.display = 'none';
+            
+            if (data.images && data.images.length > 0) {
+                displayGalleryImages(data.images);
+            } else {
+                galleryEmpty.style.display = 'block';
+            }
+            
+        } catch (error) {
+            console.error('Error fetching gallery images:', error);
+            galleryLoading.style.display = 'none';
+            galleryContainer.innerHTML = `
+                <div class="error-container">
+                    <p>Error loading gallery: ${error.message}</p>
+                    <button onclick="fetchAndDisplayImages()" class="secondary-button">Retry</button>
+                </div>
+            `;
+        }
+    }
+    
+    function displayGalleryImages(images) {
+        const galleryContainer = document.getElementById('gallery-images');
+        
+        galleryContainer.innerHTML = images.map(image => {
+            const createdDate = new Date(image.created).toLocaleString();
+            const fileSize = formatFileSize(image.size);
+            
+            return `
+                <div class="gallery-item" data-filename="${image.filename}">
+                    <div class="gallery-image-container">
+                        <img src="/outputs/${image.filename}" 
+                             alt="${image.filename}" 
+                             loading="lazy"
+                             onclick="openImageModal('${image.filename}')">
+                    </div>
+                    <div class="gallery-item-info">
+                        <div class="gallery-filename">${image.filename}</div>
+                        <div class="gallery-meta">
+                            <span class="gallery-date">${createdDate}</span>
+                            <span class="gallery-size">${fileSize}</span>
+                            ${image.job_id_prefix ? `<span class="gallery-job-id">Job: ${image.job_id_prefix}...</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+    
+    function openImageModal(filename) {
+        // Create modal for full-size image viewing
+        const modal = document.createElement('div');
+        modal.className = 'modal image-modal';
+        modal.innerHTML = `
+            <div class="modal-content image-modal-content">
+                <span class="close-modal">&times;</span>
+                <div class="image-modal-body">
+                    <img src="/outputs/${filename}" alt="${filename}" class="modal-image">
+                    <div class="image-modal-info">
+                        <h3>${filename}</h3>
+                        <div class="image-modal-actions">
+                            <a href="/outputs/${filename}" download="${filename}" class="secondary-button">Download</a>
+                            <button onclick="copyImageUrl('${filename}')" class="secondary-button">Copy URL</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        modal.style.display = 'block';
+        
+        // Close modal when clicking outside or on close button
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal || e.target.classList.contains('close-modal')) {
+                document.body.removeChild(modal);
+            }
+        });
+    }
+    
+    function copyImageUrl(filename) {
+        const url = `${window.location.origin}/outputs/${filename}`;
+        navigator.clipboard.writeText(url)
+            .then(() => alert('Image URL copied to clipboard!'))
+            .catch(err => {
+                console.error('Failed to copy URL:', err);
+                alert('Failed to copy URL to clipboard');
+            });
+    }
+    
+    // Auto-refresh gallery when jobs complete
+    function setupGalleryAutoRefresh() {
+        // Listen for job completion events
+        if (window.jobClient) {
+            const originalOnJobUpdate = window.jobClient.onJobUpdate;
+            window.jobClient.onJobUpdate = function(callback) {
+                const wrappedCallback = (job) => {
+                    // Call original callback
+                    callback(job);
+                    
+                    // If job completed and we're on gallery view, refresh gallery
+                    if (job.status === 'completed' && 
+                        document.getElementById('gallery-view').style.display !== 'none') {
+                        console.log(`Job ${job.mobilesd_job_id} completed, refreshing gallery...`);
+                        setTimeout(() => fetchAndDisplayImages(), 1000); // Small delay to ensure file is saved
+                    }
+                };
+                
+                return originalOnJobUpdate.call(this, wrappedCallback);
+            };
+        }
+    }
+    
+    // Gallery search functionality
+    function setupGallerySearch() {
+        const searchInput = document.getElementById('gallery-search');
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                const searchTerm = e.target.value.toLowerCase();
+                const galleryItems = document.querySelectorAll('.gallery-item');
+                
+                galleryItems.forEach(item => {
+                    const filename = item.dataset.filename.toLowerCase();
+                    if (filename.includes(searchTerm)) {
+                        item.style.display = 'block';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            });
+        }
+        
+        // Refresh gallery button
+        const refreshBtn = document.getElementById('refresh-gallery-btn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', fetchAndDisplayImages);
+        }
     }
     
     async function fetchAndPopulateServers() {

@@ -2,10 +2,47 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const jobQueue = require('../utils/jobQueueHelpers');
 const { readServersConfig } = require('../utils/configHelpers');
+const fs = require('fs');
+const path = require('path');
 
 const POLLING_INTERVAL_MS = process.env.DISPATCHER_POLLING_INTERVAL_MS || 5000;
+const STABLE_DIFFUSION_SAVE_PATH = process.env.STABLE_DIFFUSION_SAVE_PATH || './outputs';
 let pollIntervalId = null;
 let isStopping = false;
+
+// Ensure outputs directory exists
+if (!fs.existsSync(STABLE_DIFFUSION_SAVE_PATH)) {
+    fs.mkdirSync(STABLE_DIFFUSION_SAVE_PATH, { recursive: true });
+    console.log(`[Dispatcher] Created outputs directory: ${STABLE_DIFFUSION_SAVE_PATH}`);
+}
+
+/**
+ * Save base64 image data to file
+ */
+function saveBase64Image(base64Data, filename) {
+    try {
+        // Remove data URL prefix if present
+        const base64Image = base64Data.replace(/^data:image\/[a-z]+;base64,/, '');
+        const buffer = Buffer.from(base64Image, 'base64');
+        const filePath = path.join(STABLE_DIFFUSION_SAVE_PATH, filename);
+        
+        fs.writeFileSync(filePath, buffer);
+        console.log(`[Dispatcher] Saved image: ${filename} (${buffer.length} bytes)`);
+        return filename;
+    } catch (error) {
+        console.error(`[Dispatcher] Error saving image ${filename}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Generate filename for saved image
+ */
+function makeImageFilename(jobId, index = 0) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const jobPrefix = jobId.substring(0, 8);
+    return `${jobPrefix}_${timestamp}_${index}.png`;
+}
 
 /**
  * Parse raw generation info string into structured parameters
@@ -275,8 +312,8 @@ async function processJob(job) {
             n_iter: parsed_generation_params.n_iter || 1,
             restore_faces: parsed_generation_params.restore_faces || false,
             tiling: parsed_generation_params.tiling || false,
-            send_images: false,  // Don't send images in response to reduce payload size
-            save_images: true,   // Save images to disk
+            send_images: true,   // Send images in response for gallery functionality
+            save_images: false,  // Don't save to Forge's directory, we'll save to our own
             override_settings: {}
         };
         
@@ -314,6 +351,29 @@ async function processJob(job) {
             }
         }
         
+        // Save images to gallery
+        const savedImages = [];
+        if (responseData.images && responseData.images.length > 0) {
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Saving ${responseData.images.length} image(s) to gallery...`);
+            
+            for (let i = 0; i < responseData.images.length; i++) {
+                const imageData = responseData.images[i];
+                const filename = makeImageFilename(mobilesd_job_id, i);
+                const savedFilename = saveBase64Image(imageData, filename);
+                
+                if (savedFilename) {
+                    savedImages.push(savedFilename);
+                    console.log(`[Dispatcher] Job ${mobilesd_job_id}: Saved image ${i + 1}/${responseData.images.length}: ${savedFilename}`);
+                } else {
+                    console.error(`[Dispatcher] Job ${mobilesd_job_id}: Failed to save image ${i + 1}/${responseData.images.length}`);
+                }
+            }
+            
+            console.log(`[Dispatcher] Job ${mobilesd_job_id}: Successfully saved ${savedImages.length}/${responseData.images.length} images`);
+        } else {
+            console.warn(`[Dispatcher] Job ${mobilesd_job_id}: No images returned in response`);
+        }
+        
         // Update job to completed status
         await jobQueue.updateJob(mobilesd_job_id, {
             status: 'completed',
@@ -323,6 +383,8 @@ async function processJob(job) {
                 message: "Job completed successfully via REST API.",
                 submission_type: "sdapi_txt2img",
                 generation_info: resultInfo,
+                saved_filenames: savedImages,
+                images: savedImages, // Include under both keys for backward compatibility
                 positive_prompt: parsed_generation_params.positive_prompt || parsed_generation_params.prompt || "",
                 negative_prompt: parsed_generation_params.negative_prompt || ""
             }
