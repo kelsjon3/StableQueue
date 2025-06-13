@@ -4,6 +4,7 @@ const jobQueue = require('../utils/jobQueueHelpers'); // Import the entire modul
 const { readServersConfig } = require('../utils/configHelpers');
 const axios = require('axios');
 const path = require('path');
+const { checkModelAvailability, extractCivitaiVersionId } = require('../utils/modelDatabase');
 
 const router = express.Router();
 
@@ -20,22 +21,13 @@ router.post('/generate', async (req, res) => {
          return res.status(400).json({ error: 'Invalid or empty generation_params object provided' });
     }
 
-    // More robust checkpoint parameter normalization
-    console.log('Checking generation parameters for checkpoint:', JSON.stringify({
-        checkpoint_name: generation_params.checkpoint_name,
-        sd_checkpoint: generation_params.sd_checkpoint
-    }));
-
-    // Normalize the checkpoint parameter
-    if (!generation_params.checkpoint_name && generation_params.sd_checkpoint) {
-        console.log(`Converting sd_checkpoint parameter to checkpoint_name: ${generation_params.sd_checkpoint}`);
-        generation_params.checkpoint_name = generation_params.sd_checkpoint;
-    } else if (!generation_params.checkpoint_name && !generation_params.sd_checkpoint) {
-        console.error('No checkpoint parameter found in request!');
-        return res.status(400).json({ error: 'Missing checkpoint parameter. Please provide checkpoint_name in generation parameters.' });
+    // Optional: Log if civitai_version_id is provided for model availability checking
+    const { civitaiVersionId, source } = extractCivitaiVersionId(generation_params);
+    if (civitaiVersionId) {
+        console.log(`[API] Generation request includes Civitai version ID: ${civitaiVersionId} (from ${source})`);
+    } else {
+        console.log(`[API] Generation request has no Civitai version ID (${source})`);
     }
-
-    console.log(`Using checkpoint_name: ${generation_params.checkpoint_name}`);
 
     try {
         const servers = await readServersConfig();
@@ -48,12 +40,14 @@ router.post('/generate', async (req, res) => {
     }
 
     try {
-        const jobDataForQueue = {
-            target_server_alias,
-            generation_params 
+        // Create a structured job object for the queue
+        const jobData = {
+            target_server_alias: target_server_alias,
+            generation_params: generation_params,
+            app_type: generation_params.app_type || 'forge' // Default to forge if not specified
         };
         console.log(`Attempting to add job to queue for server ${target_server_alias} with params:`, generation_params);
-        const newJobRecord = jobQueue.addJob(jobDataForQueue);
+        const newJobRecord = jobQueue.addJob(jobData);
         
         console.log(`Job ${newJobRecord.mobilesd_job_id} added successfully to SQLite queue.`);
         res.status(202).json({ mobilesd_job_id: newJobRecord.mobilesd_job_id });
@@ -79,6 +73,35 @@ router.get('/queue/jobs/:jobId/status', (req, res) => { // Can be synchronous if
             return res.status(404).json({ error: `Job with ID '${jobId}' not found.` });
         }
 
+        // Add model availability information using simplified Civitai version ID matching
+        let model_availability = {
+            available: null,
+            reason: 'No Civitai version ID found'
+        };
+        
+        const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+        
+        if (civitaiVersionId) {
+            const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
+                model_availability = {
+                    available: availability.available,
+                    reason: availability.reason || null,
+                    civitai_model_id: availability.civitai_model_id || null,
+                    civitai_version_id: availability.civitai_version_id || null,
+                checked_field: source,
+                model_identifier: civitaiVersionId
+                    };
+                } else {
+                    model_availability = {
+                        available: false,
+                reason: source,
+                        civitai_model_id: null,
+                        civitai_version_id: null,
+                checked_field: 'N/A',
+                model_identifier: null
+                    };
+        }
+
         // The job object from getJobById already has generation_params and result_details parsed
         // Ensure all desired fields are present in the response
         res.status(200).json({
@@ -91,7 +114,8 @@ router.get('/queue/jobs/:jobId/status', (req, res) => { // Can be synchronous if
             forge_session_hash: job.forge_session_hash, // Added for more info
             generation_params: job.generation_params, // Already an object
             result_details: job.result_details, // Already an object or null
-            retry_count: job.retry_count // Added for more info
+            retry_count: job.retry_count, // Added for more info
+            model_availability: model_availability
         });
 
     } catch (error) {
@@ -115,9 +139,39 @@ router.get('/queue/jobs', (req, res) => {
         
         const jobs = jobQueue.getAllJobs(options);
         
+        // Enhance jobs with model availability information using simplified Civitai version ID matching
+        const enhancedJobs = jobs.map(job => {
+            const enhancedJob = { ...job };
+            
+            const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+            
+            if (civitaiVersionId) {
+                const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
+                        enhancedJob.model_availability = {
+                            available: availability.available,
+                            reason: availability.reason || null,
+                            civitai_model_id: availability.civitai_model_id || null,
+                            civitai_version_id: availability.civitai_version_id || null,
+                    checked_field: source,
+                    model_identifier: civitaiVersionId
+                            };
+                        } else {
+                            enhancedJob.model_availability = {
+                                available: false,
+                    reason: source,
+                                civitai_model_id: null,
+                                civitai_version_id: null,
+                    checked_field: 'N/A',
+                    model_identifier: null
+                };
+            }
+            
+            return enhancedJob;
+        });
+        
         res.status(200).json({
-            total: jobs.length,
-            jobs: jobs
+            total: enhancedJobs.length,
+            jobs: enhancedJobs
         });
     } catch (error) {
         console.error('[API] Error fetching jobs from SQLite:', error);
@@ -339,120 +393,45 @@ router.get('/progress', async (req, res) => {
 });
 */
 
-// POST /api/v1/checkpoint-verify - Test checkpoint matching
+// POST /api/v1/checkpoint-verify - Test Civitai version ID matching
 router.post('/checkpoint-verify', async (req, res) => {
-    const { target_server_alias, checkpoint_name } = req.body;
+    const { civitai_version_id } = req.body;
     
-    if (!target_server_alias || !checkpoint_name) {
+    if (!civitai_version_id) {
         return res.status(400).json({ 
             success: false, 
-            error: 'Server alias and checkpoint name are required' 
+            error: 'civitai_version_id is required' 
         });
     }
     
     try {
-        // Get server config
-        const serversConfig = await readServersConfig();
-        const server = serversConfig.find(s => s.alias === target_server_alias);
-        
-        if (!server) {
-            return res.status(404).json({ 
-                success: false, 
-                error: `Server ${target_server_alias} not found` 
-            });
-        }
-        
-        // Setup axios for the request
-        const axiosConfig = { timeout: 15000 };
-        if (server.auth && server.auth.enabled) {
-            axiosConfig.auth = {
-                username: server.auth.username,
-                password: server.auth.password
-            };
-        }
-        
-        // Get available models from server
         const modelDB = require('../utils/modelDatabase');
         
-        // Try fast local lookup first
-        const cachedModel = modelDB.findModelFast(checkpoint_name);
+        // Check if the provided value is a valid Civitai version ID
+        const availability = modelDB.checkModelAvailability(civitai_version_id, 'checkpoint');
         
-        // Get models from Forge server
-        const response = await axios.get(`${server.apiUrl}/sdapi/v1/sd-models`, axiosConfig);
-        
-        if (!response.data || !Array.isArray(response.data)) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Invalid response from Forge server' 
-            });
-        }
-        
-        // Import models into our database
-        modelDB.importModelsFromForge(response.data, 'checkpoint');
-        
-        // Attempt various matches
-        const models = response.data;
-        const normalizedForward = checkpoint_name.replace(/\\/g, '/');
-        const normalizedBackslash = checkpoint_name.replace(/\//g, '\\');
-        const filename = path.basename(checkpoint_name);
-        
-        // Exact title match
-        const exactMatch = models.find(m => m.title === checkpoint_name);
-        
-        // Forward slash match
-        const forwardSlashMatch = models.find(m => {
-            if (!m.title) return false;
-            const titleParts = m.title.split(' [');
-            const namePart = titleParts[0];
-            return namePart === normalizedForward;
+        // Extract version ID for response
+        const { civitaiVersionId, source } = modelDB.extractCivitaiVersionId({ 
+            civitai_version_id: civitai_version_id 
         });
         
-        // Backslash match
-        const backslashMatch = models.find(m => {
-            if (!m.title) return false;
-            const titleParts = m.title.split(' [');
-            const namePart = titleParts[0];
-            return namePart === normalizedBackslash;
-        });
-        
-        // Filename match
-        const filenameMatch = models.find(m => {
-            if (!m.title) return false;
-            const titleParts = m.title.split(' [');
-            const namePart = titleParts[0];
-            return path.basename(namePart) === filename;
-        });
-        
-        // Get the best match
-        const bestMatch = exactMatch || forwardSlashMatch || backslashMatch || filenameMatch;
-        
-        // Try database lookup after import
-        const dbModel = modelDB.findModel(checkpoint_name, 'checkpoint');
-        
-        // Return detailed matching results
+        // Return simplified verification results
         res.json({
             success: true,
-            checkpoint_name,
-            server: target_server_alias,
-            cache_match: cachedModel ? {
-                id: cachedModel.id,
-                name: cachedModel.name,
-                forge_title: cachedModel.forgeTitle
-            } : null,
-            database_match: dbModel ? {
-                id: dbModel.id,
-                name: dbModel.name,
-                forge_format: dbModel.forge_format
-            } : null,
-            matching_results: {
-                exact_match: exactMatch?.title || null,
-                forward_slash_match: forwardSlashMatch?.title || null,
-                backslash_match: backslashMatch?.title || null,
-                filename_match: filenameMatch?.title || null
+            civitai_version_id: civitaiVersionId,
+            source: source,
+            availability: {
+                available: availability.available,
+                reason: availability.reason,
+                civitai_model_id: availability.civitai_model_id,
+                match_type: availability.match_type
             },
-            best_match: bestMatch?.title || null,
-            sample_available_models: models.slice(0, 5).map(m => m.title),
-            total_models_count: models.length
+            model_info: availability.model ? {
+                id: availability.model.id,
+                name: availability.model.name,
+                filename: availability.model.filename,
+                forge_format: availability.model.forge_format
+            } : null
         });
     } catch (error) {
         console.error('Checkpoint verification error:', error);

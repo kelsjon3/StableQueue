@@ -1,10 +1,13 @@
 const express = require('express');
-const router = express.Router();
+const path = require('path');
+const { checkModelAvailability, extractCivitaiVersionId } = require('../utils/modelDatabase');
 const jobQueue = require('../utils/jobQueueHelpers');
 const { readServersConfig } = require('../utils/configHelpers');
-const apiLogger = require('../utils/apiLogger');
-const { apiAuthWithJobRateLimit } = require('../middleware/apiMiddleware');
-const { handleApiError } = require('../utils/apiErrorHandler');
+const rateLimit = require('express-rate-limit');
+const { apiAuthWithJobRateLimit, handleApiError } = require('../middleware/apiMiddleware');
+const { apiLogger } = require('../utils/apiLogger');
+
+const router = express.Router();
 
 /**
  * Helper function to process generation payloads from Forge extensions
@@ -322,6 +325,35 @@ router.get('/jobs/:jobId/status', apiAuthWithJobRateLimit, (req, res) => {
             });
         }
 
+        // Add model availability information using simplified Civitai version ID matching
+        let model_availability = {
+            available: null,
+            reason: 'No Civitai version ID found'
+        };
+        
+        const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+        
+        if (civitaiVersionId) {
+            const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
+            model_availability = {
+                available: availability.available,
+                reason: availability.reason || null,
+                civitai_model_id: availability.civitai_model_id || null,
+                civitai_version_id: availability.civitai_version_id || null,
+                checked_field: source,
+                model_identifier: civitaiVersionId
+            };
+        } else {
+            model_availability = {
+                available: false,
+                reason: source,
+                civitai_model_id: null,
+                civitai_version_id: null,
+                checked_field: 'N/A',
+                model_identifier: null
+            };
+        }
+
         // Log successful job status request
         apiLogger.logApiAccess('Job status request successful', {
             request: apiLogger.getSafeRequestInfo(req),
@@ -354,7 +386,8 @@ router.get('/jobs/:jobId/status', apiAuthWithJobRateLimit, (req, res) => {
                 estimated_time_remaining: job.status === 'processing' ? 
                     Math.max(0, (job.generation_params.steps || 20) * 1.5 - 
                     ((Date.now() - new Date(job.last_updated_timestamp).getTime()) / 1000)) : 
-                    null
+                    null,
+                model_availability: model_availability
             }
         });
     } catch (error) {
@@ -387,6 +420,36 @@ router.get('/jobs', apiAuthWithJobRateLimit, (req, res) => {
         // Get jobs with enhanced filtering
         const jobs = jobQueue.getAllJobs(options);
         
+        // Enhance jobs with model availability information using simplified Civitai version ID matching
+        const enhancedJobs = jobs.map(job => {
+            const enhancedJob = { ...job };
+            
+            const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+            
+            if (civitaiVersionId) {
+                const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
+                enhancedJob.model_availability = {
+                    available: availability.available,
+                    reason: availability.reason || null,
+                    civitai_model_id: availability.civitai_model_id || null,
+                    civitai_version_id: availability.civitai_version_id || null,
+                    checked_field: source,
+                    model_identifier: civitaiVersionId
+                };
+            } else {
+                enhancedJob.model_availability = {
+                    available: false,
+                    reason: source,
+                    civitai_model_id: null,
+                    civitai_version_id: null,
+                    checked_field: 'N/A',
+                    model_identifier: null
+                };
+            }
+            
+            return enhancedJob;
+        });
+        
         // Log successful jobs request
         apiLogger.logApiAccess('Jobs list request successful', {
             request: apiLogger.getSafeRequestInfo(req),
@@ -396,13 +459,13 @@ router.get('/jobs', apiAuthWithJobRateLimit, (req, res) => {
                 limit: options.limit,
                 offset: options.offset
             },
-            total_jobs: jobs.length
+            total_jobs: enhancedJobs.length
         });
         
         // Enhanced response with additional metadata
         res.status(200).json({
             success: true,
-            total: jobs.length,
+            total: enhancedJobs.length,
             filters: {
                 status: options.status,
                 app_type: options.app_type,
@@ -410,7 +473,7 @@ router.get('/jobs', apiAuthWithJobRateLimit, (req, res) => {
                 offset: options.offset,
                 order: options.order
             },
-            jobs: jobs
+            jobs: enhancedJobs
         });
     } catch (error) {
         console.error('[API v2] Error fetching jobs:', error);

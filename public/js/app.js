@@ -458,12 +458,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Main navigation function
     function showView(viewToShow, buttonToActivate) {
-        // Hide all views
-        [queueView, galleryView, serverSetupView, apiKeysView, modelsView].forEach(v => { if (v) v.style.display = 'none'; });
+        // Hide all views by removing active class
+        [queueView, galleryView, serverSetupView, apiKeysView, modelsView].forEach(v => { 
+            if (v) {
+                v.classList.remove('active');
+                v.style.display = 'none'; // Also clear any inline styles
+            }
+        });
         // Remove active from all nav buttons
         [navQueue, navGallery, navServerSetup, navApiKeys, navModels].forEach(b => { if (b) b.classList.remove('active'); });
         // Show the selected view and activate the button
-        if (viewToShow) viewToShow.style.display = '';
+        if (viewToShow) {
+            viewToShow.classList.add('active');
+            viewToShow.style.display = 'block'; // Ensure it's visible
+        }
         if (buttonToActivate) buttonToActivate.classList.add('active');
         
         // Load view-specific data
@@ -482,7 +490,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.apiKeyManagerUI.fetchAndDisplayApiKeys();
             }
         } else if (viewToShow === modelsView) {
-            fetchAndDisplayModels();
+            // fetchAndDisplayModels will be called by the nav click handler
         }
     }
 
@@ -494,7 +502,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (navModels) {
         navModels.addEventListener('click', () => {
             showView(modelsView, navModels);
-            fetchAndDisplayModels();
+            // Show helpful message if no models are cached yet
+            if (allModelsCache.length === 0) {
+                const container = document.getElementById('models-list');
+                if (container) {
+                    container.innerHTML = '<div class="no-models-message">Click "Refresh Display" to load your models, or "Scan for New Models" to scan your filesystem.</div>';
+                }
+            }
         });
     }
 
@@ -1287,91 +1301,231 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // ======================
+    // MODELS TAB FUNCTIONALITY
+    // ======================
+    
+    // Cache for models data to prevent redundant filter rebuilding
+    let allModelsCache = [];
+    let baseModelOptionsCache = new Set();
+    let modelsLoadingInProgress = false;
+    let renderDebounceTimer = null;
+    
+    // Function to determine metadata status based on model data
+    function getMetadataStatus(model) {
+        // If model has civitai_id and civitai_model_name, consider it complete
+        if (model.civitai_id && model.civitai_model_name) {
+            return 'complete';
+        }
+        
+        // If model has some metadata but not complete
+        if (model.civitai_id || model.civitai_model_base || model.civitai_model_type) {
+            return 'incomplete';
+        }
+        
+        // No metadata at all
+        return 'incomplete';
+    }
+    
+    // Function to determine availability based on model data
+    function getAvailabilityStatus(model) {
+        // For now, assume all models in database are available locally
+        // This can be enhanced later with server availability tracking
+        return true;
+    }
+    
+    // Function to get preview URL for a model
+    function getModelPreviewUrl(model) {
+        if (model.filename) {
+            const encodedPath = encodeURIComponent(model.filename);
+            return `/api/v1/models/${encodedPath}/preview?type=${model.type || 'checkpoint'}`;
+        }
+        return '/images/no-preview.png';
+    }
+
     // Function to fetch and display models
     async function fetchAndDisplayModels() {
+        // Prevent multiple simultaneous calls
+        if (modelsLoadingInProgress) {
+            console.log('Models loading already in progress, skipping...');
+            return;
+        }
+        
         try {
+            modelsLoadingInProgress = true;
+            console.log('Fetching models...');
             const response = await fetch('/api/v1/models');
             const data = await response.json();
             
             if (data.success) {
-                // Get filter values
-                const typeFilter = document.getElementById('model-type-filter').value;
-                const baseModelFilter = document.getElementById('model-base-filter').value;
-                const availabilityFilter = document.getElementById('model-availability-filter').value;
-                const metadataFilter = document.getElementById('model-metadata-filter').value;
+                console.log(`Received ${data.models.length} models from API`);
                 
-                // Filter models
-                let filtered = data.models;
+                // Update cache
+                allModelsCache = data.models;
                 
-                if (typeFilter !== 'all') {
-                    filtered = filtered.filter(model => model.type === typeFilter);
-                }
+                // Update base model filter options only if cache has changed
+                updateBaseModelFilterOptions();
                 
-                if (baseModelFilter !== 'all') {
-                    filtered = filtered.filter(model => model.civitai_model_base === baseModelFilter);
-                }
-                
-                if (availabilityFilter !== 'all') {
-                    filtered = filtered.filter(model => {
-                        const isAvailable = model.servers && model.servers.length > 0;
-                        return availabilityFilter === 'available' ? isAvailable : !isAvailable;
-                    });
-                }
-                
-                if (metadataFilter !== 'all') {
-                    filtered = filtered.filter(model => model.metadata_status === metadataFilter);
-                }
-                
-                // Populate base model filter options
-                const baseModels = new Set(data.models.map(model => model.civitai_model_base).filter(Boolean));
-                const baseModelSelect = document.getElementById('model-base-filter');
-                baseModelSelect.innerHTML = '<option value="all">All</option>';
-                baseModels.forEach(baseModel => {
-                    const option = document.createElement('option');
-                    option.value = baseModel;
-                    option.textContent = baseModel;
-                    baseModelSelect.appendChild(option);
-                });
-                
-                // Render filtered models
-                renderModels(filtered);
+                // Apply current filters and render
+                applyFiltersAndRender();
+            } else {
+                console.error('Failed to fetch models:', data.message);
+                const container = document.getElementById('models-list');
+                container.innerHTML = '<div class="error-message">Failed to load models: ' + (data.message || 'Unknown error') + '</div>';
             }
         } catch (error) {
             console.error('Error fetching models:', error);
+            const container = document.getElementById('models-list');
+            container.innerHTML = '<div class="error-message">Error loading models: ' + error.message + '</div>';
+        } finally {
+            modelsLoadingInProgress = false;
         }
+    }
+
+    // Function to update base model filter options (only when needed)
+    function updateBaseModelFilterOptions() {
+        const newBaseModels = new Set(allModelsCache.map(model => model.civitai_model_base).filter(Boolean));
+        
+        // Check if options have changed
+        const optionsChanged = newBaseModels.size !== baseModelOptionsCache.size || 
+            [...newBaseModels].some(model => !baseModelOptionsCache.has(model));
+            
+        if (optionsChanged) {
+            console.log('Updating base model filter options');
+            baseModelOptionsCache = newBaseModels;
+            
+            const baseModelSelect = document.getElementById('model-base-filter');
+            const currentValue = baseModelSelect.value;
+            
+            baseModelSelect.innerHTML = '<option value="all">All</option>';
+            [...newBaseModels].sort().forEach(baseModel => {
+                const option = document.createElement('option');
+                option.value = baseModel;
+                option.textContent = baseModel;
+                baseModelSelect.appendChild(option);
+            });
+            
+            // Restore previous selection if still valid
+            if ([...newBaseModels].includes(currentValue)) {
+                baseModelSelect.value = currentValue;
+            }
+        }
+    }
+
+    // Function to apply current filters and render models (with debouncing)
+    function applyFiltersAndRender() {
+        // Clear any existing debounce timer
+        if (renderDebounceTimer) {
+            clearTimeout(renderDebounceTimer);
+        }
+        
+        // Debounce the rendering to prevent rapid successive calls
+        renderDebounceTimer = setTimeout(() => {
+            // Get current filter values
+            const typeFilter = document.getElementById('model-type-filter')?.value || 'all';
+            const baseModelFilter = document.getElementById('model-base-filter')?.value || 'all';
+            const availabilityFilter = document.getElementById('model-availability-filter')?.value || 'all';
+            const metadataFilter = document.getElementById('model-metadata-filter')?.value || 'all';
+            
+            // Filter models
+            let filtered = allModelsCache;
+            
+            if (typeFilter !== 'all') {
+                filtered = filtered.filter(model => model.type === typeFilter);
+            }
+            
+            if (baseModelFilter !== 'all') {
+                filtered = filtered.filter(model => model.civitai_model_base === baseModelFilter);
+            }
+            
+            if (availabilityFilter !== 'all') {
+                filtered = filtered.filter(model => {
+                    const isAvailable = getAvailabilityStatus(model);
+                    return availabilityFilter === 'available' ? isAvailable : !isAvailable;
+                });
+            }
+            
+            if (metadataFilter !== 'all') {
+                filtered = filtered.filter(model => {
+                    const status = getMetadataStatus(model);
+                    return status === metadataFilter;
+                });
+            }
+            
+            console.log(`Rendering ${filtered.length} filtered models`);
+            renderModels(filtered);
+            renderDebounceTimer = null;
+        }, 100); // 100ms debounce delay
     }
 
     // Function to render models in the grid
     function renderModels(models) {
         const container = document.getElementById('models-list');
+        
+        if (!container) {
+            console.error('Models container not found');
+            return;
+        }
+        
         container.innerHTML = '';
+        
+        if (models.length === 0) {
+            container.innerHTML = '<div class="no-models-message">No models found matching the current filters.</div>';
+            return;
+        }
         
         models.forEach(model => {
             const card = document.createElement('div');
             card.className = 'model-card';
             
             // Determine availability status
-            const isAvailable = model.servers && model.servers.length > 0;
+            const isAvailable = getAvailabilityStatus(model);
             const availabilityClass = isAvailable ? 'available' : 'unavailable';
             
             // Determine metadata status
-            const metadataClass = model.metadata_status || 'incomplete';
+            const metadataStatus = getMetadataStatus(model);
+            const metadataClass = metadataStatus;
+            
+            // Safely escape text content
+            const safeName = (model.name || model.filename || 'Unknown Model').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const safeType = (model.type || 'Unknown Type').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const safeBaseModel = (model.civitai_model_base || 'Unknown Base').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const safeDescription = model.civitai_model_version_desc ? 
+                model.civitai_model_version_desc.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
+            
+            // Get model type icon
+            const typeIcon = model.type === 'lora' ? '🎨' : '🖼️';
+            
+            // Get preview URL for the model
+            const previewUrl = getModelPreviewUrl(model);
+            
+            // Create preview content - try to load image, fallback to placeholder
+            const previewContent = `
+                <img src="${previewUrl}" 
+                     alt="${safeName}" 
+                     loading="lazy" 
+                     onerror="this.parentElement.innerHTML='<div class=\\'placeholder\\'><div class=\\'icon\\'>${typeIcon}</div><div class=\\'type-label\\'>${safeType}</div></div>'">
+            `;
             
             card.innerHTML = `
                 <div class="model-preview">
-                    <img src="${model.preview_url || '/images/no-preview.png'}" alt="${model.name}" onerror="this.src='/images/no-preview.png'">
+                    ${previewContent}
                 </div>
                 <div class="model-info">
-                    <h3>${model.name}</h3>
-                    <p class="model-type">${model.type || 'Unknown Type'}</p>
-                    <p class="model-base">${model.civitai_model_base || 'Unknown Base'}</p>
-                    <p class="model-availability ${availabilityClass}">
-                        ${isAvailable ? 'Available' : 'Unavailable'}
-                    </p>
-                    <p class="model-metadata ${metadataClass}">
-                        Metadata: ${model.metadata_status || 'Incomplete'}
-                    </p>
-                    ${model.civitai_model_version_desc ? `<p class="model-description">${model.civitai_model_version_desc}</p>` : ''}
+                    <h3>${safeName}</h3>
+                    <div class="model-meta">
+                        <div class="model-type">${safeType}</div>
+                        <div class="model-base">${safeBaseModel}</div>
+                    </div>
+                    <div class="model-badges">
+                        <span class="model-availability ${availabilityClass}">
+                            ${isAvailable ? 'Available' : 'Unavailable'}
+                        </span>
+                        <span class="model-metadata ${metadataClass}">
+                            ${metadataStatus}
+                        </span>
+                    </div>
+                    ${safeDescription ? `<div class="model-description">${safeDescription}</div>` : ''}
                 </div>
             `;
             
@@ -1379,73 +1533,188 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Add event listeners for filters
-    document.addEventListener('DOMContentLoaded', () => {
-        const filters = [
+    // Function to handle model scanning
+    async function handleModelScan() {
+        const scanBtn = document.getElementById('scan-models-btn');
+        if (!scanBtn) return;
+        
+        scanBtn.disabled = true;
+        const originalText = scanBtn.textContent;
+        scanBtn.textContent = 'Scanning...';
+        
+        try {
+            console.log('Starting model scan...');
+            const response = await fetch('/api/v1/models/scan', { method: 'POST' });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log('Scan complete!', data);
+                
+                // Use the detailed message from backend if available
+                const message = data.message || 
+                    `Found ${data.stats?.total || 0} models (${data.stats?.checkpoints || 0} checkpoints, ${data.stats?.loras || 0} LoRAs)`;
+                
+                // Refresh models display
+                await fetchAndDisplayModels();
+                
+                // Show success message (you can enhance this with a toast notification)
+                alert(`Scan complete! ${message}`);
+            } else {
+                throw new Error(data.message || 'Scan failed');
+            }
+        } catch (error) {
+            console.error('Model scan failed:', error);
+            alert('Scan failed: ' + error.message);
+        } finally {
+            scanBtn.disabled = false;
+            scanBtn.textContent = originalText;
+        }
+    }
+
+    // Function to show the database reset confirmation modal
+    function showResetDatabaseModal() {
+        const modal = document.getElementById('reset-database-modal');
+        if (modal) {
+            modal.style.display = 'block';
+        }
+    }
+
+    // Function to hide the database reset modal
+    function hideResetDatabaseModal() {
+        const modal = document.getElementById('reset-database-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
+    }
+
+    // Function to handle the actual database reset
+    async function handleDatabaseReset() {
+        const confirmBtn = document.getElementById('confirm-reset-db-btn');
+        if (!confirmBtn) return;
+        
+        confirmBtn.disabled = true;
+        const originalText = confirmBtn.textContent;
+        confirmBtn.textContent = 'Resetting...';
+        
+        try {
+            console.log('Starting database reset...');
+            const response = await fetch('/api/v1/models/reset-database', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log('Database reset complete!', data);
+                
+                // Hide the modal
+                hideResetDatabaseModal();
+                
+                // Refresh models display to show empty state
+                await fetchAndDisplayModels();
+                
+                // Show success message
+                alert('Models database has been reset successfully! A backup was created before the reset.');
+            } else {
+                throw new Error(data.message || 'Database reset failed');
+            }
+        } catch (error) {
+            console.error('Database reset failed:', error);
+            alert('Database reset failed: ' + error.message);
+        } finally {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = originalText;
+        }
+    }
+
+    // Initialize models functionality
+    function initializeModelsTab() {
+        console.log('Initializing models tab...');
+        
+        // Set up filter event listeners
+        const filterIds = [
             'model-type-filter',
             'model-base-filter',
             'model-availability-filter',
             'model-metadata-filter'
         ];
         
-        filters.forEach(filterId => {
+        filterIds.forEach(filterId => {
             const element = document.getElementById(filterId);
             if (element) {
-                element.addEventListener('change', fetchAndDisplayModels);
+                element.addEventListener('change', applyFiltersAndRender);
+            } else {
+                console.warn(`Filter element ${filterId} not found`);
             }
         });
         
-        // Initial fetch
-        fetchAndDisplayModels();
-    });
-
-    const localScanBtn = document.getElementById('local-scan-btn');
-    if (localScanBtn) {
-        localScanBtn.addEventListener('click', async () => {
-            localScanBtn.disabled = true;
-            localScanBtn.textContent = 'Scanning...';
-            try {
-                const resp = await fetch('/api/v1/models/scan-local', { method: 'POST' });
-                const data = await resp.json();
-                if (data.success) {
-                    await fetchAndDisplayModels();
-                } else {
-                    alert('Scan failed: ' + (data.message || 'Unknown error'));
+        // Set up scan button
+        // Setup models controls
+        const refreshBtn = document.getElementById('refresh-models-btn');
+        const scanBtn = document.getElementById('scan-models-btn');
+        const resetDbBtn = document.getElementById('reset-models-db-btn');
+        
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => {
+                console.log('Refreshing models display...');
+                fetchAndDisplayModels();
+            });
+        }
+        
+        if (scanBtn) {
+            scanBtn.addEventListener('click', handleModelScan);
+        } else {
+            console.warn('Scan button not found');
+        }
+        
+        if (resetDbBtn) {
+            resetDbBtn.addEventListener('click', showResetDatabaseModal);
+        } else {
+            console.warn('Reset database button not found');
+        }
+        
+        // Setup reset database modal event listeners
+        const resetModal = document.getElementById('reset-database-modal');
+        const confirmResetBtn = document.getElementById('confirm-reset-db-btn');
+        const cancelResetBtn = document.getElementById('cancel-reset-db-btn');
+        const closeModalBtn = resetModal?.querySelector('.close-modal');
+        
+        if (confirmResetBtn) {
+            confirmResetBtn.addEventListener('click', handleDatabaseReset);
+        }
+        
+        if (cancelResetBtn) {
+            cancelResetBtn.addEventListener('click', hideResetDatabaseModal);
+        }
+        
+        if (closeModalBtn) {
+            closeModalBtn.addEventListener('click', hideResetDatabaseModal);
+        }
+        
+        // Close modal when clicking outside of it
+        if (resetModal) {
+            resetModal.addEventListener('click', (e) => {
+                if (e.target === resetModal) {
+                    hideResetDatabaseModal();
                 }
-            } catch (err) {
-                alert('Scan failed: ' + err.message);
-            }
-            localScanBtn.disabled = false;
-            localScanBtn.textContent = 'Local Scan';
-        });
+            });
+        }
+        
+        // No need for additional nav click handler - it's already handled in main nav setup
     }
 
-    // Local Scan button logic
-    const scanBtn = document.getElementById('scan-models-btn');
-    const scanStatus = document.getElementById('scan-status');
-    if (scanBtn) {
-        scanBtn.addEventListener('click', async () => {
-            scanBtn.disabled = true;
-            const originalText = scanBtn.textContent;
-            scanBtn.textContent = 'Scanning...';
-            if (scanStatus) scanStatus.textContent = 'Scanning for new models...';
-            try {
-                const res = await fetch('/api/v1/models/scan', { method: 'POST' });
-                if (!res.ok) throw new Error('Scan failed');
-                const data = await res.json();
-                if (data.success) {
-                    const found = (data.stats && typeof data.stats.total === 'number') ? data.stats.total : (data.found || 0);
-                    scanStatus.textContent = `Scan complete! Found ${found} models.`;
-                } else {
-                    scanStatus.textContent = 'Scan finished, but no models were found.';
-                }
-                await fetchAndDisplayModels();
-            } catch (err) {
-                scanStatus.textContent = 'Error scanning for models: ' + err.message;
-            } finally {
-                scanBtn.disabled = false;
-                scanBtn.textContent = originalText;
-            }
-        });
-    }
+    // Initialize models tab (this will be called from the main initialization)
+    initializeModelsTab();
 });

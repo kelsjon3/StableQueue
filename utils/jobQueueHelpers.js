@@ -456,6 +456,9 @@ function getAllJobs(options = {}) {
         ...row,
         generation_params: JSON.parse(row.generation_params_json || '{}'),
         result_details: row.result_details_json ? JSON.parse(row.result_details_json) : null,
+        // Preserve the original JSON strings for model availability checking
+        generation_params_json: row.generation_params_json,
+        result_details_json: row.result_details_json,
         // Include new fields with fallbacks
         app_type: row.app_type || 'forge',
         source_info: row.source_info || 'ui',

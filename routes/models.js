@@ -62,60 +62,18 @@ async function rateLimitedCivitaiRequest(url, options = {}) {
  */
 router.get('/models', async (req, res) => {
     try {
-        const checkpointPath = process.env.CHECKPOINT_PATH;
-        const loraPath = process.env.LORA_PATH;
-        
-        if (!checkpointPath || !loraPath) {
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Model paths not configured. Check CHECKPOINT_PATH and LORA_PATH environment variables.' 
-            });
-        }
-        
-        // Scan both directories
-        const checkpoints = await scanModelDirectory(checkpointPath, MODEL_EXTENSIONS, checkpointPath);
-        const loras = await scanModelDirectory(loraPath, MODEL_EXTENSIONS, loraPath);
-        
-        // Add type and base model info to each model
-        const checkpointsWithType = checkpoints.map(model => {
-            return {
-                ...model,
-                type: 'checkpoint',
-                baseModel: extractBaseModel(model),
-                preview_url: getPreviewUrl(model, 'checkpoint'),
-                civitai_url: getCivitaiUrl(model),
-                // Add description if available from metadata
-                description: model.description || model.model?.description || null
-            };
-        });
-        
-        const lorasWithType = loras.map(model => {
-            return {
-                ...model,
-                type: 'lora',
-                baseModel: extractBaseModel(model),
-                preview_url: getPreviewUrl(model, 'lora'),
-                civitai_url: getCivitaiUrl(model),
-                // Add description if available from metadata
-                description: model.description || model.model?.description || null
-            };
-        });
-        
-        // Combine and return
-        const combinedModels = [...checkpointsWithType, ...lorasWithType];
-        
+        const models = modelDB.getAllModels();
         res.json({
             success: true,
-            count: combinedModels.length,
-            models: combinedModels
+            count: models.length,
+            models
         });
-        
     } catch (error) {
         console.error('Error retrieving models:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to retrieve models', 
-            error: error.message 
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve models',
+            error: error.message
         });
     }
 });
@@ -663,6 +621,52 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
             });
         }
         
+        // After fetching metadata from Civitai, extract all relevant fields for DB
+        let hash_autov2 = null;
+        let hash_sha256 = null;
+        let file_size_kb = null;
+        if (metadata && metadata.modelVersionId) {
+            try {
+                const versionResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/${metadata.modelVersionId}`);
+                const versionData = versionResponse.data;
+                // Find the main file (usually .safetensors or .ckpt)
+                const mainFile = (versionData.files || []).find(f => f.name && (f.name.endsWith('.safetensors') || f.name.endsWith('.ckpt')));
+                if (mainFile && mainFile.hashes) {
+                    hash_autov2 = mainFile.hashes.AutoV2 || null;
+                    hash_sha256 = mainFile.hashes.SHA256 || null;
+                    file_size_kb = mainFile.sizeKB || null;
+                }
+            } catch (err) {
+                console.warn(`[Models] Could not fetch file hashes for version ${metadata.modelVersionId}: ${err.message}`);
+            }
+        }
+        // Prepare trained words as JSON string
+        let trained_words = null;
+        if (metadata.trainedWords && Array.isArray(metadata.trainedWords)) {
+            trained_words = JSON.stringify(metadata.trainedWords);
+        }
+        // Store all metadata in the database
+        modelDB.addOrUpdateModel({
+            name: modelName,
+            type: type,
+            local_path: directory,
+            filename: filename,
+            civitai_id: metadata.modelId || civitaiModelId || null,
+            civitai_version_id: metadata.modelVersionId || civitaiVersionId || null,
+            forge_format: null, // Not used here
+            hash_autov2: hash_autov2,
+            hash_sha256: hash_sha256,
+            civitai_model_name: metadata.name || null,
+            civitai_model_base: metadata.baseModel || null,
+            civitai_model_type: metadata.type || null,
+            civitai_model_version_name: metadata.name || null,
+            civitai_model_version_desc: metadata.description || null,
+            civitai_model_version_date: metadata.updated_at || metadata.createdAt || null,
+            civitai_download_url: metadata.downloadUrl || null,
+            civitai_trained_words: trained_words,
+            civitai_file_size_kb: file_size_kb
+        });
+        
         // Save metadata using the Forge-compatible path
         await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
         console.log(`[Models] Saved metadata to ${metadataPath}`);
@@ -759,29 +763,203 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
     }
 });
 
-// Helper function to extract base model from metadata
-function extractBaseModel(model) {
-    // If model has Civitai metadata, try to extract base model
-    if (model.baseModel) return model.baseModel;
-    if (model.model?.baseModel) return model.model.baseModel;
-    
-    // Determine from filename using common patterns
+/**
+ * POST /api/v1/models/scan
+ * Scans configured model directories for models and updates the database
+ * Uses metadata from .civitai.json files or embedded metadata
+ */
+router.post('/models/scan', async (req, res) => {
+    console.log('[Models] /api/v1/models/scan endpoint called');
+    try {
+        // Log model count before scan
+        const preScanCount = modelDB.getAllModels().length;
+        console.log(`[ModelScan] Models in DB before scan: ${preScanCount}`);
+        
+        // Use single MODEL_PATH that searches recursively
+        const modelPath = process.env.MODEL_PATH || process.env.CHECKPOINT_PATH;
+        
+        if (!modelPath) {
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Model path not configured. Set MODEL_PATH environment variable or use legacy CHECKPOINT_PATH.' 
+            });
+        }
+
+        console.log(`[ModelScan] Scanning models recursively from: ${modelPath}`);
+        
+        // Scan single directory recursively and determine type by extension/location
+        const allModels = await scanModelDirectory(modelPath, MODEL_EXTENSIONS, modelPath);
+        
+        let stats = {
+            total: allModels.length,
+            added: 0,
+            updated: 0,
+            errors: 0,
+            incomplete: 0,
+            checkpoints: 0,
+            loras: 0
+        };
+
+        // Process all models in single unified loop
+        for (const model of allModels) {
+            try {
+                // Determine model type based on filename and path
+                const modelType = determineModelType(model, modelPath);
+                
+                const modelDir = path.join(modelPath, model.relativePath || '');
+                model.local_path = modelDir;
+                model.type = modelType;
+                const metadata = await readModelMetadata(model);
+                const modelData = {
+                    name: model.filename,
+                    local_path: modelDir,
+                    filename: model.filename,
+                    type: modelType,
+                    metadata_status: metadata ? 'complete' : 'incomplete'
+                };
+                if (metadata) {
+                    Object.assign(modelData, {
+                        hash_autov2: metadata.hash_autov2 || null,
+                        hash_sha256: metadata.hash_sha256 || null,
+                        civitai_id: metadata.modelId || null,
+                        civitai_version_id: metadata.modelVersionId || null,
+                        civitai_model_name: metadata.name || null,
+                        civitai_model_base: metadata.baseModel || null,
+                        civitai_model_type: metadata.type || null,
+                        civitai_model_version_name: metadata.versionName || null,
+                        civitai_model_version_desc: metadata.description || null,
+                        civitai_model_version_date: metadata.createdAt || null,
+                        civitai_download_url: metadata.downloadUrl || null,
+                        civitai_trained_words: metadata.trainedWords || null,
+                        civitai_file_size_kb: metadata.fileSizeKB || null
+                    });
+                }
+                // Uniqueness logic: always check DB for each model
+                let exists = false;
+                if (modelData.hash_autov2) {
+                    exists = modelDB.findModelsByHash(modelData.hash_autov2, 'autov2').length > 0;
+                } else if (modelData.hash_sha256) {
+                    exists = modelDB.findModelsByHash(modelData.hash_sha256, 'sha256').length > 0;
+                } else {
+                    // Fallback: check by filename only
+                    exists = modelDB.getAllModels().some(m => m.filename === modelData.filename);
+                    if (exists) {
+                        console.warn(`[ModelScan] Skipping model with duplicate filename (no hash): ${modelData.filename}`);
+                    }
+                }
+                if (!exists) {
+                    const modelId = modelDB.addOrUpdateModel(modelData);
+                    const serverId = req.headers['x-server-id'] || 'local';
+                    modelDB.updateModelServerAvailability(modelId, serverId);
+                    if (metadata) {
+                        stats.updated++;
+                    } else {
+                        stats.incomplete++;
+                    }
+                    
+                    // Track counts by type
+                    if (modelType === 'checkpoint') {
+                        stats.checkpoints++;
+                    } else if (modelType === 'lora') {
+                        stats.loras++;
+                    }
+                    
+                    console.log(`[ModelScan] Added ${modelType}: ${modelData.filename}`);
+                }
+            } catch (error) {
+                console.error(`Error processing model ${model.filename}:`, error);
+                stats.errors++;
+            }
+        }
+
+        // Log model count after scan
+        const postScanCount = modelDB.getAllModels().length;
+        console.log(`[ModelScan] Models in DB after scan: ${postScanCount}`);
+        console.log(`[ModelScan] Scan complete: ${stats.checkpoints} checkpoints, ${stats.loras} LoRAs, ${stats.errors} errors`);
+
+        res.json({
+            success: true,
+            stats,
+            message: `Found ${stats.total} models (${stats.checkpoints} checkpoints, ${stats.loras} LoRAs)`
+        });
+    } catch (error) {
+        console.error('Error scanning models:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to scan models', 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Helper function to determine model type based on filename and path
+ * @param {Object} model - Model information from scanModelDirectory
+ * @param {string} rootPath - Root scanning path
+ * @returns {string} Model type ('checkpoint' or 'lora')
+ */
+function determineModelType(model, rootPath) {
     const filename = model.filename.toLowerCase();
+    const relativePath = model.relativePath ? model.relativePath.toLowerCase() : '';
     
-    if (filename.includes('sdxl') || filename.includes('sd-xl')) return 'SDXL';
-    if (filename.includes('sd15') || filename.includes('sd-15')) return 'SD 1.5';
-    if (filename.includes('sd3')) return 'SD 3';
-    if (filename.includes('sd2') || filename.includes('sd-2')) return 'SD 2';
-    if (filename.includes('pony')) return 'Pony';
-    if (filename.includes('flux-1') || filename.includes('flux.1')) return 'Flux.1 D';
-    if (filename.includes('flux') && !filename.includes('reflux')) return 'Flux';
-    if (filename.includes('reflux')) return 'Reflux';
+    // Priority 1: Check file extensions
+    if (filename.includes('.lora.') || filename.endsWith('.lora.safetensors') || filename.endsWith('.lora.pt')) {
+        return 'lora';
+    }
     
-    // Default fallback
-    return 'Unknown';
+    // Priority 2: Check directory names in path
+    if (relativePath.includes('lora') || relativePath.includes('loras')) {
+        return 'lora';
+    }
+    
+    // Priority 3: Check for common LoRA patterns in filename
+    const loraPatterns = [
+        'lora', 'style', 'concept', 'character', 'pose', 'clothing', 'embedding',
+        'textual_inversion', 'ti', 'hypernetwork', 'hypernet'
+    ];
+    
+    for (const pattern of loraPatterns) {
+        if (filename.includes(pattern)) {
+            return 'lora';
+        }
+    }
+    
+    // Priority 4: Check directory names for checkpoint indicators
+    if (relativePath.includes('checkpoint') || relativePath.includes('model') || 
+        relativePath.includes('stable-diffusion') || relativePath.includes('sd')) {
+        return 'checkpoint';
+    }
+    
+    // Default: Assume checkpoint for standard model extensions
+    return 'checkpoint';
 }
 
-// Helper function for extracting base model from metadata
+/**
+ * Helper function to read metadata from a model file or its associated .civitai.json
+ * @param {Object} model - Model information from scanModelDirectory
+ * @returns {Promise<Object|null>} Metadata object or null if not found
+ */
+async function readModelMetadata(model) {
+    try {
+        // Try to read .civitai.json first
+        const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
+        const jsonPath = path.join(model.local_path, `${baseName}.civitai.json`);
+        
+        try {
+            const jsonData = await fs.readFile(jsonPath, 'utf-8');
+            return JSON.parse(jsonData);
+        } catch (err) {
+            // No .civitai.json found, try to read embedded metadata
+            // TODO: Implement embedded metadata reading
+            return null;
+        }
+    } catch (error) {
+        console.error(`Error reading metadata for ${model.filename}:`, error);
+        return null;
+    }
+}
+
+// Helper function to extract base model from metadata
 function extractBaseModelFromMetadata(metadata) {
     if (metadata.baseModel) return metadata.baseModel;
     if (metadata.model?.baseModel) return metadata.model.baseModel;
@@ -835,5 +1013,139 @@ function determineBaseModelFromFilename(filename) {
     // Default to the most common
     return 'SD 1.5';
 }
+
+/**
+ * POST /api/v1/models/:id/availability
+ * Update availability of a model on a server
+ */
+router.post('/models/:id/availability', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const serverId = req.headers['x-server-id'];
+        
+        if (!serverId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Server ID required in x-server-id header'
+            });
+        }
+
+        const success = modelDB.updateModelServerAvailability(modelId, serverId);
+        
+        if (success) {
+            res.json({
+                success: true,
+                message: 'Model availability updated'
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: 'Failed to update model availability'
+            });
+        }
+    } catch (error) {
+        console.error('Error updating model availability:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update model availability',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * DELETE /api/v1/models/:id/availability
+ * Remove availability of a model on a server
+ */
+router.delete('/models/:id/availability', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const serverId = req.headers['x-server-id'];
+        
+        if (!serverId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Server ID required in x-server-id header'
+            });
+        }
+
+        const success = modelDB.removeModelServerAvailability(modelId, serverId);
+        
+        if (success) {
+            res.json({
+                success: true,
+                message: 'Model availability removed'
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: 'Failed to remove model availability'
+            });
+        }
+    } catch (error) {
+        console.error('Error removing model availability:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to remove model availability',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/v1/models/reset-database
+ * Resets the entire models database (destructive operation)
+ */
+router.post('/models/reset-database', async (req, res) => {
+    try {
+        console.log('[Models] Database reset requested');
+        
+        const success = modelDB.resetDatabase();
+        
+        if (success) {
+            console.log('[Models] Database reset completed successfully');
+            res.json({
+                success: true,
+                message: 'Models database has been reset successfully'
+            });
+        } else {
+            console.error('[Models] Database reset failed');
+            res.status(500).json({
+                success: false,
+                message: 'Failed to reset models database'
+            });
+        }
+    } catch (error) {
+        console.error('Error resetting models database:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to reset models database',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/v1/models/:id/availability
+ * Get all servers that have this model
+ */
+router.get('/models/:id/availability', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const servers = modelDB.getModelServers(modelId);
+        
+        res.json({
+            success: true,
+            servers
+        });
+    } catch (error) {
+        console.error('Error getting model availability:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get model availability',
+            error: error.message
+        });
+    }
+});
 
 module.exports = router; 

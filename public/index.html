@@ -11,28 +11,28 @@
     <script src="js/jobStatusClient.js"></script>
 </head>
 <body>
-    <header>
+    <header class="header">
         <h1>StableQueue</h1>
-        <nav>
-            <button id="nav-queue" class="nav-button active">Queue</button>
-            <button id="nav-gallery" class="nav-button">Gallery</button>
-            <button id="nav-server-setup" class="nav-button">Server Setup</button>
-            <button id="nav-api-keys" class="nav-button">API Keys</button>
-        </nav>
     </header>
+    
+    <nav class="nav-tabs">
+        <button id="nav-queue" class="nav-button active">Queue</button>
+        <button id="nav-models" class="nav-button">Models</button>
+        <button id="nav-gallery" class="nav-button">Gallery</button>
+        <button id="nav-server-setup" class="nav-button">Server Setup</button>
+        <button id="nav-api-keys" class="nav-button">API Keys</button>
+    </nav>
 
-    <main id="main-content">
+    <div class="container">
+        <main id="main-content" class="tab-content">
 
-        <section id="queue-view">
-            <h2>Job Queue</h2>
+        <section id="queue-view" class="tab-pane active">
             
             <div id="queue-controls" class="card">
                 <div class="queue-processing-control">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="queue-processing-toggle" checked>
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <label for="queue-processing-toggle" class="toggle-label">Queue Processing</label>
+                    <span class="queue-processing-label">Queue Processing:</span>
+                    <button id="start-queue-btn" class="secondary-button">Start Queue</button>
+                    <button id="stop-queue-btn" class="danger-button">Stop Queue</button>
                     <span id="queue-processing-status" class="status-indicator">Enabled</span>
                 </div>
                 <button id="refresh-queue-btn" class="secondary-button">Refresh Queue</button>
@@ -55,8 +55,11 @@
                         <tr>
                             <th>Job ID</th>
                             <th>Status</th>
+                            <th>Checkpoint</th>
+                            <th>LoRAs</th>
                             <th>Server</th>
                             <th>Created</th>
+                            <th>Civitai Version ID</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -98,8 +101,7 @@
             </div>
         </section>
 
-        <section id="gallery-view" style="display: none;">
-            <h2>Image Gallery</h2>
+        <section id="gallery-view" class="tab-pane" style="display: none;">
             
             <div id="gallery-controls" class="card">
                 <button id="refresh-gallery-btn" class="secondary-button">Refresh Gallery</button>
@@ -127,8 +129,7 @@
             </div>
         </section>
 
-        <section id="server-setup-view" style="display: none;">
-            <h2>Server Configuration</h2>
+        <section id="server-setup-view" class="tab-pane" style="display: none;">
              <div id="server-list-container" class="card">
                  <h3>Existing Servers</h3>
                  <ul id="server-list"></ul>
@@ -163,8 +164,7 @@
              </div>
         </section>
 
-        <section id="api-keys-view" style="display: none;">
-            <h2>API Key Management</h2>
+        <section id="api-keys-view" class="tab-pane" style="display: none;">
             <div id="api-keys-list-container" class="card">
                 <h3>Existing API Keys</h3>
                 <div class="api-keys-controls">
@@ -269,11 +269,70 @@
             </div>
         </section>
 
-    </main>
+        <section id="models-view" class="tab-pane" style="display: none;">
+            <div class="models-controls">
+                <div class="button-group">
+                    <button id="refresh-models-btn">Refresh Display</button>
+                    <button id="scan-models-btn">Scan for New Models</button>
+                    <button id="reset-models-db-btn" class="danger-button">Reset Database</button>
+                </div>
+                <div class="filter-group">
+                    <label for="model-type-filter">Type:</label>
+                    <select id="model-type-filter">
+                        <option value="all">All</option>
+                        <option value="checkpoint">Checkpoint</option>
+                        <option value="lora">LoRA</option>
+                    </select>
+                    
+                    <label for="model-base-filter">Base Model:</label>
+                    <select id="model-base-filter">
+                        <option value="all">All</option>
+                    </select>
+                    
+                    <label for="model-availability-filter">Availability:</label>
+                    <select id="model-availability-filter">
+                        <option value="all">All</option>
+                        <option value="available">Available</option>
+                        <option value="unavailable">Unavailable</option>
+                    </select>
+                    
+                    <label for="model-metadata-filter">Metadata:</label>
+                    <select id="model-metadata-filter">
+                        <option value="all">All</option>
+                        <option value="complete">Complete</option>
+                        <option value="incomplete">Incomplete</option>
+                    </select>
+                </div>
+            </div>
+            <div id="models-list" class="models-list-grid"></div>
+        </section>
 
-    <footer>
-        <p>StableQueue Interface</p>
-    </footer>
+        </main>
+    </div>
+
+    <!-- Database Reset Confirmation Modal -->
+    <div id="reset-database-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <div class="modal-body">
+                <h3>⚠️ Reset Models Database</h3>
+                <p class="alert alert-danger">
+                    <strong>WARNING:</strong> This action will permanently delete all model metadata, including:
+                </p>
+                <ul>
+                    <li>All model records and metadata</li>
+                    <li>Civitai integration data</li>
+                    <li>Model server availability tracking</li>
+                    <li>Model aliases and paths</li>
+                </ul>
+                <p><strong>This action cannot be undone. Are you sure?</strong></p>
+                <div class="form-buttons">
+                    <button id="confirm-reset-db-btn" class="danger-button">Yes, Reset Database</button>
+                    <button id="cancel-reset-db-btn" class="secondary-button">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="js/app.js"></script>
     <script src="js/apiKeyManager.js"></script>

@@ -17,6 +17,7 @@ const galleryRouter = require('./routes/gallery');
 const settingsRouter = require('./routes/settings');
 const forgeJobMonitor = require('./services/forgeJobMonitor');
 const jobStatusManager = require('./services/jobStatusManager');
+const modelsRouter = require('./routes/models');
 
 // Load environment variables from .env file if it exists
 try {
@@ -64,6 +65,7 @@ app.use('/api/v1/gallery', galleryRouter);
 app.use('/api/v1/api-keys', apiKeysRouter);
 app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v2', v2GenerationRouter);
+app.use('/api/v1', modelsRouter);
 
 // Basic status endpoint
 app.get('/status', (req, res) => {
