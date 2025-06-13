@@ -1,206 +1,348 @@
 # StableQueue
 
-A job queuing system for Stable Diffusion and other AI tools, designed to work seamlessly with A1111 WebUI Forge and other Stable Diffusion interfaces.
+A robust job queuing system for Stable Diffusion and other AI tools, designed to work seamlessly with A1111 WebUI Forge and provide reliable, persistent job management.
 
 ## Overview
 
-StableQueue provides a robust, browser-independent queuing system for managing multiple image generation jobs. It acts as an intermediary between client applications (like the Forge extension) and Stable Diffusion servers, providing reliable job management, progress tracking, and result handling.
+StableQueue acts as an intelligent intermediary between client applications and Stable Diffusion servers, providing persistent job queuing, multi-server management, and reliable result handling. The system is designed to be simple, reliable, and production-ready.
 
-## Core Application Flow
+## 🚀 Current Status
 
-1. **Application starts** - Works immediately, no setup required
-2. **Add servers** - Connect to your Stable Diffusion instances as needed
-3. **Generate API keys** - Create them when needed for external applications
-4. **Manage jobs** - Queue, monitor, and view results
-5. **View images** - See generated content in the frontend gallery
+**Production Deployment**: ✅ Active at Unraid Server (192.168.73.124:8083)  
+**Version**: 1.0.0  
+**Status**: Stable and operational  
 
-## Key Features
+## ✨ Key Features
 
-- **Persistent Job Queue**: Jobs survive server restarts and browser disconnects
-- **Multi-Server Support**: Manage multiple Stable Diffusion instances
-- **Web UI**: Administrative interface for managing servers, jobs, and API keys
-- **Extension Support**: Works with A1111 WebUI Forge extension
-- **API Access**: Full REST API for external applications
-- **Progress Tracking**: Real-time job status and progress updates
-- **Image Management**: Automatic image saving and gallery viewing
+- **Zero-Setup Start**: Works immediately after deployment - no complex setup required
+- **Persistent Job Queue**: Jobs survive server restarts and network disconnections
+- **Multi-Server Support**: Manage multiple Stable Diffusion instances simultaneously
+- **Web Administrative UI**: Complete management interface (no authentication required for admin tasks)
+- **Secure API Access**: Full REST API with dual authentication methods for external applications
+- **Real-Time Progress**: Live job status updates and progress tracking
+- **Automatic Image Management**: Built-in image saving and gallery viewing
+- **Production-Ready**: Docker deployment with automated scripts
 
-## Quick Start
+## 🎯 Application Flow
 
-### Docker Deployment (Recommended)
+The application follows a simple, reliable pattern:
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/your-username/StableQueue.git
-   cd StableQueue
-   ```
+1. **Starts Immediately** → No setup wizards or complex initialization
+2. **Add Servers** → Connect to your Stable Diffusion instances as needed
+3. **Generate API Keys** → Create credentials for external applications (Forge extensions, etc.)
+4. **Queue Jobs** → Submit image generation tasks through web UI or API
+5. **Monitor Progress** → Track jobs in real-time with automatic updates
+6. **View Results** → Access generated images through the built-in gallery
 
-2. **Configure environment** (optional):
-   ```bash
-   cp .env.example .env
-   # Edit .env with your settings
-   ```
+## 🐳 Quick Start with Docker (Recommended)
 
-3. **Start with Docker Compose**:
-   ```bash
-   docker-compose up -d
-   ```
+### For Unraid Deployment (Production)
 
-4. **Access the web interface**:
-   - Open http://localhost:8083 in your browser
+```bash
+# Clone the repository
+git clone https://github.com/kelsjon3/StableQueue.git
+cd StableQueue
 
-### Manual Installation
+# Configure your environment (recommended)
+cp .env.example .env
+# Edit .env with your UNRAID_HOST, CIVITAI_API_KEY, and other settings
 
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+# Deploy to Unraid server
+./deploy-stablequeue-to-unraid.sh
+```
 
-2. **Start the server**:
-   ```bash
-   npm start
-   ```
+The deployment script automatically:
+- Builds the Docker image locally
+- Transfers to your Unraid server
+- Clears any stuck jobs from previous deployments
+- Starts the container with proper volume mappings
+- Preserves your data and configuration
 
-3. **Access the web interface**:
-   - Open http://localhost:3000 in your browser
+### For Local Development
 
-## Configuration
+```bash
+# Using Docker Compose
+docker-compose up -d
 
-### Adding Stable Diffusion Servers
+# Or manual installation
+npm install
+npm start
+```
 
-1. Navigate to the **Server Setup** tab in the web UI
+Access the web interface at `http://localhost:8083` (or your configured port).
+
+## 🔧 Configuration
+
+### Server Management
+
+1. Navigate to **Server Setup** tab in the web UI
 2. Click **Add Server**
-3. Enter server details:
-   - **Name**: Friendly name for the server
+3. Configure your Stable Diffusion servers:
+   - **Name**: Descriptive name (e.g., "Laptop", "ArchLinux")
    - **URL**: Base URL (e.g., `http://192.168.1.100:7860`)
-   - **Username/Password**: If authentication is required
+   - **Authentication**: Username/password if required
 
 ### API Key Management
 
-API keys are used by external applications to authenticate with StableQueue:
+For external applications (like Forge extensions):
 
-1. Navigate to the **API Keys** tab in the web UI
+1. Navigate to **API Keys** tab in the web UI
 2. Click **Create New Key**
-3. Enter a name and description
+3. Provide name and description
 4. Copy the generated key and secret
 5. Use these credentials in external applications
 
-**Important**: The web UI has administrative access and doesn't require API keys. API keys are FOR external applications like the Forge extension.
+**Important Notes**:
+- The web UI has full administrative access and doesn't require API keys
+- API keys are **only** for external applications
+- Both `X-API-Key`/`X-API-Secret` and `Authorization: Bearer` headers are supported
 
-## API Documentation
+## 📡 API Documentation
 
 ### Authentication
 
 External applications must authenticate using API keys:
 
 ```bash
-# Using X-API-Key and X-API-Secret headers
+# Method 1: Using X-API-Key and X-API-Secret headers (recommended)
 curl -H "X-API-Key: mk_your_api_key" \
      -H "X-API-Secret: your_api_secret" \
      http://localhost:8083/api/v1/generate
 
-# Or using Authorization header
+# Method 2: Using Authorization header (for compatibility)
 curl -H "Authorization: Bearer $(echo -n 'api_key:api_secret' | base64)" \
      http://localhost:8083/api/v1/generate
 ```
 
 ### Job Submission
 
-Submit image generation jobs:
+Submit image generation jobs with full parameter support:
 
 ```bash
 curl -X POST http://localhost:8083/api/v1/generate \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_api_key" \
+  -H "X-API-Key: mk_your_api_key" \
   -H "X-API-Secret: your_api_secret" \
   -d '{
-    "target_server_alias": "Laptop",
+    "target_server_alias": "ArchLinux",
     "generation_params": {
-      "positive_prompt": "a beautiful landscape",
-      "negative_prompt": "ugly, blurry",
-      "checkpoint_name": "model.safetensors",
-      "width": 512,
-      "height": 512,
+      "positive_prompt": "a beautiful landscape, masterpiece, detailed",
+      "negative_prompt": "ugly, blurry, low quality",
+      "checkpoint_name": "realismEngineSDXL_v30VAE.safetensors",
+      "model_hash": "abc123def456",
+      "width": 1024,
+      "height": 1024,
       "steps": 20,
       "cfg_scale": 7,
-      "sampler_name": "Euler"
+      "sampler_name": "Euler a",
+      "seed": -1
     }
   }'
 ```
 
-### Job Status
+### Job Status and Results
 
-Check job status and retrieve results:
+Monitor job progress and retrieve results:
 
 ```bash
-curl -H "X-API-Key: your_api_key" \
-     -H "X-API-Secret: your_api_secret" \
+# Get job status
+curl -H "X-API-Key: your_key" \
+     -H "X-API-Secret: your_secret" \
      http://localhost:8083/api/v1/queue/jobs/JOB_ID/status
+
+# List all jobs
+curl -H "X-API-Key: your_key" \
+     -H "X-API-Secret: your_secret" \
+     http://localhost:8083/api/v1/queue/jobs
 ```
 
 For complete API documentation, see [docs/API.md](docs/API.md).
 
-## Forge Extension
+## 🧩 Forge Extension Integration
 
-StableQueue includes an extension for A1111 WebUI Forge that enables direct job submission from the Forge interface.
+StableQueue is designed to work seamlessly with A1111 WebUI Forge through dedicated extensions.
 
-### Installation
+### Supported Extensions
 
-1. In Forge WebUI, go to **Extensions** → **Install from URL**
-2. Enter the repository URL: `https://github.com/your-username/StableQueue.git`
-3. Click **Install**
-4. Restart Forge WebUI
+- **sd-civitai-browser-plus-stablequeue**: Enhanced version of the popular Civitai browser extension with StableQueue integration
+- **StableQueue-Forge-Extension**: Dedicated Forge extension for direct job submission
 
-### Configuration
+### Extension Configuration
 
-1. Go to **Settings** → **StableQueue**
-2. Configure:
-   - **Server URL**: Your StableQueue server (e.g., `http://192.168.1.100:8083`)
-   - **API Key**: Key generated from StableQueue web UI
-   - **API Secret**: Secret from StableQueue web UI
+1. Install the extension in Forge WebUI
+2. Go to **Settings** → **StableQueue** (or relevant extension settings)
+3. Configure:
+   - **Server URL**: Your StableQueue server (e.g., `http://192.168.73.124:8083`)
+   - **API Key**: Generated from StableQueue web UI
+   - **API Secret**: Corresponding secret from StableQueue
 
-## Architecture
+### Parameter Capture
 
-StableQueue consists of:
+The extensions automatically capture:
+- All generation parameters from Forge UI
+- Model checkpoints and LoRA information
+- Image metadata when working with existing images
+- Complete generation info strings from PNG metadata
 
-- **Node.js/Express Backend**: API server and job management
-- **SQLite Database**: Persistent storage for jobs, servers, and API keys
-- **Web Frontend**: Administrative interface (HTML/CSS/JavaScript)
-- **Job Dispatcher**: Background service for job processing
-- **Progress Monitor**: Real-time job status tracking
+## 🏗️ Architecture
 
-## Environment Variables
+### Core Components
 
-Key environment variables:
+- **Node.js/Express Backend**: RESTful API server with job management
+- **Dual SQLite Architecture**: 
+  - `mobilesd_jobs.sqlite`: Job queue, API keys, and processing status
+  - `mobilesd_models.sqlite`: Model metadata, availability tracking, and Civitai integration
+- **Web Frontend**: Administrative interface built with vanilla HTML/CSS/JavaScript
+- **Job Dispatcher**: Background service for processing and monitoring jobs
+- **Progress Monitor**: Real-time WebSocket updates for job status
+- **Image Handler**: Automatic saving and gallery management
+- **Model Database System**: Comprehensive model management with hash-based identification and server availability tracking
 
-- `PORT`: Server port (default: 3000)
-- `CONFIG_DATA_PATH`: Data directory path
-- `STABLE_DIFFUSION_SAVE_PATH`: Image output directory
-- `LORA_PATH`: LoRA models directory
-- `CHECKPOINT_PATH`: Checkpoint models directory
+### Key Design Principles
 
-## Contributing
+- **Simplicity First**: No complex setup wizards or unnecessary configuration
+- **Reliability**: Jobs persist through restarts and network issues
+- **Flexibility**: Support multiple authentication methods and parameter formats
+- **Production Ready**: Docker deployment with proper error handling
+- **Database Integrity**: Automated migration system with backup protection for schema updates
+
+## 🔧 Environment Variables
+
+StableQueue uses environment variables for configuration. Copy the example file and customize for your environment:
+
+```bash
+cp .env.example .env
+# Edit .env with your specific configuration
+```
+
+### Key Configuration Variables
+
+- **`PORT`**: API server port (default: 3000)
+- **`CONFIG_DATA_PATH`**: Data directory for SQLite databases
+- **`STABLE_DIFFUSION_SAVE_PATH`**: Directory for generated images
+- **`LORA_PATH`**: LoRA models directory
+- **`CHECKPOINT_PATH`**: Checkpoint models directory
+- **`CIVITAI_API_KEY`**: Civitai API key for model metadata
+- **`UNRAID_HOST`**: Target Unraid server for deployment
+- **`UNRAID_USER`**: SSH user for Unraid deployment
+
+For the complete list of available environment variables, see [`.env.example`](.env.example).
+
+### Volume Mappings (Docker)
+
+```yaml
+volumes:
+  - ./data:/usr/src/app/data                           # SQLite databases and configuration
+  - /mnt/user/Stable_Diffusion_Data/outputs/StableQueue:/app/outputs
+  - /mnt/user/Stable_Diffusion_Data/models/Lora:/app/models/Lora
+  - /mnt/user/Stable_Diffusion_Data/models/Stable-diffusion:/app/models/Stable-diffusion
+```
+
+**Important**: The `/data` directory contains both SQLite databases (`mobilesd_jobs.sqlite` and `mobilesd_models.sqlite`) and must be properly mapped to ensure data persistence across container updates.
+
+## 🚀 Deployment
+
+### Production Deployment (Unraid)
+
+The project includes an automated deployment script optimized for Unraid servers:
+
+```bash
+./deploy-stablequeue-to-unraid.sh
+```
+
+**Features**:
+- Automatic image building and transfer
+- Job queue clearing before deployment
+- Volume mapping for shared model libraries
+- Environment variable injection
+- Container restart with preserved data
+
+### Manual Docker Deployment
+
+```bash
+# Build and start
+docker-compose up -d
+
+# View logs
+docker-compose logs -f stablequeue
+
+# Stop and clean up
+docker-compose down
+```
+
+## 🧪 Testing
+
+The project includes comprehensive API testing:
+
+```bash
+# Run all API tests
+npm run test:api
+
+# Run tests with verbose output
+npm run test:api:verbose
+
+# Run manual testing scripts
+npm run test:api:manual
+```
+
+## 📁 Project Structure
+
+```
+StableQueue/
+├── app.js                     # Main application entry point
+├── package.json              # Node.js dependencies and scripts
+├── .env.example              # Environment configuration template
+├── docker-compose.yml        # Docker deployment configuration
+├── deploy-stablequeue-to-unraid.sh # Automated deployment script
+├── routes/                    # API route handlers
+├── services/                  # Core business logic
+├── middleware/                # Authentication and CORS
+├── public/                    # Web UI static files
+├── scripts/                   # Testing and utility scripts
+├── data/                      # SQLite database and configuration
+└── docs/                      # Comprehensive documentation
+```
+
+## 📚 Documentation
+
+- **[API.md](docs/API.md)**: Complete API reference
+- **[DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md)**: Comprehensive database schema documentation
+- **[DEPLOYMENT_STATUS.md](docs/DEPLOYMENT_STATUS.md)**: Current deployment information
+- **[FORGE_EXTENSION_PLAN.md](docs/FORGE_EXTENSION_PLAN.md)**: Extension development guide
+- **[API_KEY_UI_SUMMARY.md](docs/API_KEY_UI_SUMMARY.md)**: Authentication implementation details
+
+## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## License
+## 📝 License
 
 This project is licensed under the ISC License - see the [LICENSE](LICENSE) file for details.
 
-## Support
+## 🆘 Support
 
-For issues and questions:
+**For Issues and Questions**:
+- Check the [documentation](docs/) directory
+- Review [existing issues](https://github.com/kelsjon3/StableQueue/issues)
+- Create a new issue with detailed information
 
-- Check the [documentation](docs/)
-- Review [existing issues](https://github.com/your-username/StableQueue/issues)
-- Create a new issue if needed
+**Current Production Server**: http://192.168.73.124:8083
 
-## Deployment Information
+## 🔄 Recent Updates
 
-**Current Production Deployment**: 
-- Server: Unraid at 192.168.73.124:8083
-- Status: Active and operational
-- Deployment Method: Docker container via deployment script 
+- **Dual-Database Architecture**: Separated job queue and model management into optimized databases
+- **Comprehensive Model System**: Hash-based model identification with Civitai integration and server availability tracking
+- **Automated Migration System**: Safe database schema updates with automatic backups
+- **Simplified Setup**: Removed complex "first-time setup" logic for reliability
+- **Dual Authentication**: Support for both header-based and bearer token authentication
+- **Enhanced Extensions**: Improved parameter capture from Forge UI and image metadata
+- **Automatic Deployment**: Streamlined Unraid deployment with job queue management
+- **Production Stability**: Comprehensive testing and error handling improvements
+
+---
+
+**Note**: This project focuses on simplicity and reliability. The core philosophy is "works immediately, no complex setup required" - if you encounter setup complexity, that's a bug to be fixed, not a feature to be documented. 
