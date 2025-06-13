@@ -42,11 +42,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const navGallery = document.getElementById('nav-gallery');
     const navServerSetup = document.getElementById('nav-server-setup');
     const navApiKeys = document.getElementById('nav-api-keys');
+    const navModels = document.getElementById('nav-models');
     
     // View Elements
     const queueView = document.getElementById('queue-view');
     const galleryView = document.getElementById('gallery-view');
     const serverSetupView = document.getElementById('server-setup-view');
+    const modelsView = document.getElementById('models-view');
     
     // Server list element
     const serverListUL = document.getElementById('server-list');
@@ -457,20 +459,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Main navigation function
     function showView(viewToShow, buttonToActivate) {
         // Hide all views
-        queueView.style.display = 'none';
-        galleryView.style.display = 'none';
-        serverSetupView.style.display = 'none';
-        apiKeysView.style.display = 'none';
-        
-        // Remove active class from all buttons
-        navQueue.classList.remove('active');
-        navGallery.classList.remove('active');
-        navServerSetup.classList.remove('active');
-        navApiKeys.classList.remove('active');
-        
-        // Show selected view and activate the button
-        viewToShow.style.display = 'block';
-        buttonToActivate.classList.add('active');
+        [queueView, galleryView, serverSetupView, apiKeysView, modelsView].forEach(v => { if (v) v.style.display = 'none'; });
+        // Remove active from all nav buttons
+        [navQueue, navGallery, navServerSetup, navApiKeys, navModels].forEach(b => { if (b) b.classList.remove('active'); });
+        // Show the selected view and activate the button
+        if (viewToShow) viewToShow.style.display = '';
+        if (buttonToActivate) buttonToActivate.classList.add('active');
         
         // Load view-specific data
         if (viewToShow === queueView) {
@@ -487,6 +481,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.apiKeyManagerUI) {
                 window.apiKeyManagerUI.fetchAndDisplayApiKeys();
             }
+        } else if (viewToShow === modelsView) {
+            fetchAndDisplayModels();
         }
     }
 
@@ -495,9 +491,15 @@ document.addEventListener('DOMContentLoaded', () => {
     navGallery.addEventListener('click', () => showView(galleryView, navGallery));
     navServerSetup.addEventListener('click', () => showView(serverSetupView, navServerSetup));
     navApiKeys.addEventListener('click', () => showView(apiKeysView, navApiKeys));
+    if (navModels) {
+        navModels.addEventListener('click', () => {
+            showView(modelsView, navModels);
+            fetchAndDisplayModels();
+        });
+    }
 
-    // Queue processing toggle functionality
-    initializeQueueProcessingToggle();
+    // Queue processing start/stop functionality
+    initializeQueueProcessingControls();
 
     // Initialize the app
     initializeJobClient();
@@ -769,11 +771,88 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             
+            // Create checkpoint availability indicator
+            let checkpointAvailabilityHtml = '';
+            console.log('DEBUG: Job ID:', job.mobilesd_job_id, 'has model_availability:', !!job.model_availability, 'value:', job.model_availability);
+            if (job.model_availability) {
+                const availability = job.model_availability;
+                if (availability.available === true) {
+                    checkpointAvailabilityHtml = `
+                        <span class="checkpoint-availability checkpoint-available" title="${availability.reason}">
+                            ✅ Available
+                        </span>
+                    `;
+                } else if (availability.available === false) {
+                    checkpointAvailabilityHtml = `
+                        <span class="checkpoint-availability checkpoint-unavailable" title="${availability.reason}">
+                            ❌ Unavailable
+                        </span>
+                    `;
+                } else {
+                    checkpointAvailabilityHtml = `
+                        <span class="checkpoint-availability checkpoint-unknown" title="${availability.reason}">
+                            ❓ ${availability.reason || 'Unknown'}
+                        </span>
+                    `;
+                }
+                
+                // Add additional checkpoint info if available
+                if (availability.civitai_model_id) {
+                    checkpointAvailabilityHtml += `
+                        <div class="checkpoint-info">
+                            <small>Civitai ID: ${availability.civitai_model_id}</small>
+                            ${availability.civitai_version_id ? `<br><small>Version: ${availability.civitai_version_id}</small>` : ''}
+                        </div>
+                    `;
+                }
+            } else {
+                checkpointAvailabilityHtml = `
+                    <span class="checkpoint-availability checkpoint-unknown" title="Checkpoint availability not checked">
+                        ❓ Not checked
+                    </span>
+                `;
+            }
+            
+            // Create LoRA availability indicator (placeholder for future implementation)
+            let loraAvailabilityHtml = '';
+            if (job.lora_availability) {
+                // TODO: Implement LoRA availability checking similar to checkpoint
+                const loraAvailability = job.lora_availability;
+                if (loraAvailability.all_available === true) {
+                    loraAvailabilityHtml = `
+                        <span class="lora-availability lora-available" title="All LoRAs available">
+                            ✅ All (${loraAvailability.available_count}/${loraAvailability.total_count})
+                        </span>
+                    `;
+                } else if (loraAvailability.all_available === false) {
+                    loraAvailabilityHtml = `
+                        <span class="lora-availability lora-unavailable" title="Some LoRAs missing">
+                            ❌ ${loraAvailability.available_count}/${loraAvailability.total_count}
+                        </span>
+                    `;
+                } else {
+                    loraAvailabilityHtml = `
+                        <span class="lora-availability lora-unknown" title="LoRA availability not checked">
+                            ❓ Unknown
+                        </span>
+                    `;
+                }
+            } else {
+                loraAvailabilityHtml = `
+                    <span class="lora-availability lora-none" title="No LoRAs detected or not checked">
+                        ➖ None/Unknown
+                    </span>
+                `;
+            }
+            
             row.innerHTML = `
                 <td class="job-id">${job.mobilesd_job_id}</td>
                 <td>${statusHtml}</td>
+                <td>${checkpointAvailabilityHtml}</td>
+                <td>${loraAvailabilityHtml}</td>
                 <td>${job.target_server_alias || 'Unknown'}</td>
                 <td>${createdDate}</td>
+                <td>${job.model_availability?.civitai_version_id || 'N/A'}</td>
                 <td>
                     <div class="queue-job-actions">
                         <button class="secondary-button view-details-btn" data-job-id="${job.mobilesd_job_id}">Details</button>
@@ -1056,51 +1135,63 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Queue Processing Toggle Functions
-    function initializeQueueProcessingToggle() {
-        const toggle = document.getElementById('queue-processing-toggle');
+    // Queue Processing Start/Stop Functions
+    function initializeQueueProcessingControls() {
+        const startBtn = document.getElementById('start-queue-btn');
+        const stopBtn = document.getElementById('stop-queue-btn');
         const statusIndicator = document.getElementById('queue-processing-status');
         
-        if (!toggle || !statusIndicator) {
-            console.warn('Queue processing toggle elements not found');
+        if (!startBtn || !stopBtn || !statusIndicator) {
+            console.warn('Queue processing control elements not found');
             return;
         }
 
         // Load current settings
         loadQueueProcessingStatus();
 
-        // Add event listener for toggle changes
-        toggle.addEventListener('change', async (e) => {
-            const enabled = e.target.checked;
-            
-            try {
-                const response = await fetch('/api/v1/settings/queue-processing', {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ enabled })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const result = await response.json();
-                
-                if (result.success) {
-                    updateToggleStatus(enabled);
-                    console.log(`Queue processing ${enabled ? 'enabled' : 'disabled'}`);
-                } else {
-                    throw new Error(result.error || 'Failed to update setting');
-                }
-            } catch (error) {
-                console.error('Error toggling queue processing:', error);
-                alert('Failed to update queue processing setting');
-                // Revert toggle state
-                e.target.checked = !enabled;
-            }
+        // Add event listeners for Start/Stop buttons
+        startBtn.addEventListener('click', async () => {
+            await setQueueProcessing(true, startBtn);
         });
+
+        stopBtn.addEventListener('click', async () => {
+            await setQueueProcessing(false, stopBtn);
+        });
+    }
+
+    async function setQueueProcessing(enabled, buttonElement) {
+        const originalText = buttonElement.textContent;
+        buttonElement.textContent = enabled ? 'Starting...' : 'Stopping...';
+        buttonElement.disabled = true;
+        
+        try {
+            const response = await fetch('/api/v1/settings/queue-processing', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ enabled })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            if (result.success) {
+                updateQueueStatus(enabled);
+                console.log(`Queue processing ${enabled ? 'started' : 'stopped'}`);
+            } else {
+                throw new Error(result.error || 'Failed to update setting');
+            }
+        } catch (error) {
+            console.error('Error updating queue processing:', error);
+            alert(`Failed to ${enabled ? 'start' : 'stop'} queue processing: ${error.message}`);
+        } finally {
+            buttonElement.textContent = originalText;
+            buttonElement.disabled = false;
+        }
     }
 
     async function loadQueueProcessingStatus() {
@@ -1115,26 +1206,31 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (result.success && result.settings) {
                 const enabled = result.settings.queueProcessingEnabled !== false; // Default to true
-                
-                const toggle = document.getElementById('queue-processing-toggle');
-                if (toggle) {
-                    toggle.checked = enabled;
-                    updateToggleStatus(enabled);
-                }
+                updateQueueStatus(enabled);
             }
         } catch (error) {
             console.error('Error loading queue processing status:', error);
             // Default to enabled if we can't load the setting
-            updateToggleStatus(true);
+            updateQueueStatus(true);
         }
     }
 
-    function updateToggleStatus(enabled) {
+    function updateQueueStatus(enabled) {
         const statusIndicator = document.getElementById('queue-processing-status');
+        const startBtn = document.getElementById('start-queue-btn');
+        const stopBtn = document.getElementById('stop-queue-btn');
         
         if (statusIndicator) {
-            statusIndicator.textContent = enabled ? 'Enabled' : 'Disabled';
+            statusIndicator.textContent = enabled ? 'Running' : 'Stopped';
             statusIndicator.className = `status-indicator ${enabled ? 'enabled' : 'disabled'}`;
+        }
+        
+        // Update button states
+        if (startBtn && stopBtn) {
+            startBtn.disabled = enabled;
+            stopBtn.disabled = !enabled;
+            startBtn.style.opacity = enabled ? '0.6' : '1';
+            stopBtn.style.opacity = !enabled ? '0.6' : '1';
         }
     }
 
@@ -1189,5 +1285,167 @@ document.addEventListener('DOMContentLoaded', () => {
             
             alert(errorMessage);
         }
+    }
+
+    // Function to fetch and display models
+    async function fetchAndDisplayModels() {
+        try {
+            const response = await fetch('/api/v1/models');
+            const data = await response.json();
+            
+            if (data.success) {
+                // Get filter values
+                const typeFilter = document.getElementById('model-type-filter').value;
+                const baseModelFilter = document.getElementById('model-base-filter').value;
+                const availabilityFilter = document.getElementById('model-availability-filter').value;
+                const metadataFilter = document.getElementById('model-metadata-filter').value;
+                
+                // Filter models
+                let filtered = data.models;
+                
+                if (typeFilter !== 'all') {
+                    filtered = filtered.filter(model => model.type === typeFilter);
+                }
+                
+                if (baseModelFilter !== 'all') {
+                    filtered = filtered.filter(model => model.civitai_model_base === baseModelFilter);
+                }
+                
+                if (availabilityFilter !== 'all') {
+                    filtered = filtered.filter(model => {
+                        const isAvailable = model.servers && model.servers.length > 0;
+                        return availabilityFilter === 'available' ? isAvailable : !isAvailable;
+                    });
+                }
+                
+                if (metadataFilter !== 'all') {
+                    filtered = filtered.filter(model => model.metadata_status === metadataFilter);
+                }
+                
+                // Populate base model filter options
+                const baseModels = new Set(data.models.map(model => model.civitai_model_base).filter(Boolean));
+                const baseModelSelect = document.getElementById('model-base-filter');
+                baseModelSelect.innerHTML = '<option value="all">All</option>';
+                baseModels.forEach(baseModel => {
+                    const option = document.createElement('option');
+                    option.value = baseModel;
+                    option.textContent = baseModel;
+                    baseModelSelect.appendChild(option);
+                });
+                
+                // Render filtered models
+                renderModels(filtered);
+            }
+        } catch (error) {
+            console.error('Error fetching models:', error);
+        }
+    }
+
+    // Function to render models in the grid
+    function renderModels(models) {
+        const container = document.getElementById('models-list');
+        container.innerHTML = '';
+        
+        models.forEach(model => {
+            const card = document.createElement('div');
+            card.className = 'model-card';
+            
+            // Determine availability status
+            const isAvailable = model.servers && model.servers.length > 0;
+            const availabilityClass = isAvailable ? 'available' : 'unavailable';
+            
+            // Determine metadata status
+            const metadataClass = model.metadata_status || 'incomplete';
+            
+            card.innerHTML = `
+                <div class="model-preview">
+                    <img src="${model.preview_url || '/images/no-preview.png'}" alt="${model.name}" onerror="this.src='/images/no-preview.png'">
+                </div>
+                <div class="model-info">
+                    <h3>${model.name}</h3>
+                    <p class="model-type">${model.type || 'Unknown Type'}</p>
+                    <p class="model-base">${model.civitai_model_base || 'Unknown Base'}</p>
+                    <p class="model-availability ${availabilityClass}">
+                        ${isAvailable ? 'Available' : 'Unavailable'}
+                    </p>
+                    <p class="model-metadata ${metadataClass}">
+                        Metadata: ${model.metadata_status || 'Incomplete'}
+                    </p>
+                    ${model.civitai_model_version_desc ? `<p class="model-description">${model.civitai_model_version_desc}</p>` : ''}
+                </div>
+            `;
+            
+            container.appendChild(card);
+        });
+    }
+
+    // Add event listeners for filters
+    document.addEventListener('DOMContentLoaded', () => {
+        const filters = [
+            'model-type-filter',
+            'model-base-filter',
+            'model-availability-filter',
+            'model-metadata-filter'
+        ];
+        
+        filters.forEach(filterId => {
+            const element = document.getElementById(filterId);
+            if (element) {
+                element.addEventListener('change', fetchAndDisplayModels);
+            }
+        });
+        
+        // Initial fetch
+        fetchAndDisplayModels();
+    });
+
+    const localScanBtn = document.getElementById('local-scan-btn');
+    if (localScanBtn) {
+        localScanBtn.addEventListener('click', async () => {
+            localScanBtn.disabled = true;
+            localScanBtn.textContent = 'Scanning...';
+            try {
+                const resp = await fetch('/api/v1/models/scan-local', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    await fetchAndDisplayModels();
+                } else {
+                    alert('Scan failed: ' + (data.message || 'Unknown error'));
+                }
+            } catch (err) {
+                alert('Scan failed: ' + err.message);
+            }
+            localScanBtn.disabled = false;
+            localScanBtn.textContent = 'Local Scan';
+        });
+    }
+
+    // Local Scan button logic
+    const scanBtn = document.getElementById('scan-models-btn');
+    const scanStatus = document.getElementById('scan-status');
+    if (scanBtn) {
+        scanBtn.addEventListener('click', async () => {
+            scanBtn.disabled = true;
+            const originalText = scanBtn.textContent;
+            scanBtn.textContent = 'Scanning...';
+            if (scanStatus) scanStatus.textContent = 'Scanning for new models...';
+            try {
+                const res = await fetch('/api/v1/models/scan', { method: 'POST' });
+                if (!res.ok) throw new Error('Scan failed');
+                const data = await res.json();
+                if (data.success) {
+                    const found = (data.stats && typeof data.stats.total === 'number') ? data.stats.total : (data.found || 0);
+                    scanStatus.textContent = `Scan complete! Found ${found} models.`;
+                } else {
+                    scanStatus.textContent = 'Scan finished, but no models were found.';
+                }
+                await fetchAndDisplayModels();
+            } catch (err) {
+                scanStatus.textContent = 'Error scanning for models: ' + err.message;
+            } finally {
+                scanBtn.disabled = false;
+                scanBtn.textContent = originalText;
+            }
+        });
     }
 });
