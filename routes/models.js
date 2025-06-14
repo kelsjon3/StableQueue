@@ -5,6 +5,7 @@ const fsSync = require('fs');
 const { scanModelDirectory } = require('../utils/configHelpers');
 const modelDB = require('../utils/modelDatabase');
 const axios = require('axios');
+const { calculateFileHash, checkFileSizeForHashing, formatDuration } = require('../utils/hashCalculator');
 
 const router = express.Router();
 
@@ -771,6 +772,10 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
 router.post('/models/scan', async (req, res) => {
     console.log('[Models] /api/v1/models/scan endpoint called');
     try {
+        // Get scan options from request body
+        const { calculateHashes = false } = req.body;
+        console.log(`[ModelScan] Options: calculateHashes=${calculateHashes}`);
+        
         // Log model count before scan
         const preScanCount = modelDB.getAllModels().length;
         console.log(`[ModelScan] Models in DB before scan: ${preScanCount}`);
@@ -794,77 +799,233 @@ router.post('/models/scan', async (req, res) => {
             total: allModels.length,
             added: 0,
             updated: 0,
+            skipped: 0,
             errors: 0,
-            incomplete: 0,
             checkpoints: 0,
-            loras: 0
+            loras: 0,
+            hashesCalculated: 0,
+            hashesSkipped: 0,
+            hashErrors: 0
         };
 
         // Process all models in single unified loop
         for (const model of allModels) {
             try {
-                // Determine model type based on filename and path
-                const modelType = determineModelType(model, modelPath);
-                
                 const modelDir = path.join(modelPath, model.relativePath || '');
                 model.local_path = modelDir;
-                model.type = modelType;
+                
+                // Read metadata using established hierarchy
                 const metadata = await readModelMetadata(model);
-                const modelData = {
-                    name: model.filename,
-                    local_path: modelDir,
-                    filename: model.filename,
-                    type: modelType,
-                    metadata_status: metadata ? 'complete' : 'incomplete'
-                };
+                
+                // Determine metadata completeness and status
+                let metadataStatus = 'none';
                 if (metadata) {
-                    Object.assign(modelData, {
-                        hash_autov2: metadata.hash_autov2 || null,
-                        hash_sha256: metadata.hash_sha256 || null,
-                        civitai_id: metadata.modelId || null,
-                        civitai_version_id: metadata.modelVersionId || null,
-                        civitai_model_name: metadata.name || null,
-                        civitai_model_base: metadata.baseModel || null,
-                        civitai_model_type: metadata.type || null,
-                        civitai_model_version_name: metadata.versionName || null,
-                        civitai_model_version_desc: metadata.description || null,
-                        civitai_model_version_date: metadata.createdAt || null,
-                        civitai_download_url: metadata.downloadUrl || null,
-                        civitai_trained_words: metadata.trainedWords || null,
-                        civitai_file_size_kb: metadata.fileSizeKB || null
-                    });
-                }
-                // Uniqueness logic: always check DB for each model
-                let exists = false;
-                if (modelData.hash_autov2) {
-                    exists = modelDB.findModelsByHash(modelData.hash_autov2, 'autov2').length > 0;
-                } else if (modelData.hash_sha256) {
-                    exists = modelDB.findModelsByHash(modelData.hash_sha256, 'sha256').length > 0;
-                } else {
-                    // Fallback: check by filename only
-                    exists = modelDB.getAllModels().some(m => m.filename === modelData.filename);
-                    if (exists) {
-                        console.warn(`[ModelScan] Skipping model with duplicate filename (no hash): ${modelData.filename}`);
+                    if (metadata._complete) {
+                        metadataStatus = 'complete';
+                    } else {
+                        metadataStatus = 'partial';
                     }
                 }
-                if (!exists) {
+                
+                // Create base model data - always include filename and local_path
+                const modelData = {
+                    name: model.filename,
+                    type: null, // Will be set later from metadata or remain null
+                    local_path: modelDir,
+                    filename: model.filename,
+                    metadata_status: metadataStatus,
+                    metadata_source: metadata?._json_source || (metadata?._has_embedded ? 'embedded' : 'none'),
+                    has_embedded_metadata: metadata?._has_embedded || false
+                };
+                
+                // Add metadata fields if available (don't infer anything)
+                if (metadata) {
+                    // Handle different hash field names from different sources
+                    const hash_autov2 = metadata.hash_autov2 || metadata.AutoV2 || null;
+                    const hash_sha256 = metadata.hash_sha256 || metadata.SHA256 || metadata.sha256 || null;
+                    
+                    // Extract type from explicit metadata sources
+                    if (metadata.type) {
+                        modelData.type = metadata.type;
+                    } else if (metadata['modelspec.architecture']) {
+                        // Extract type from modelspec.architecture (e.g., "flux-1-dev/lora" → "lora")
+                        const architecture = metadata['modelspec.architecture'];
+                        if (architecture && typeof architecture === 'string') {
+                            if (architecture.includes('/lora')) {
+                                modelData.type = 'lora';
+                            } else if (architecture.includes('/checkpoint') || architecture.includes('checkpoint')) {
+                                modelData.type = 'checkpoint';
+                            }
+                        }
+                    }
+                    
+                    // Helper function to safely convert complex values to strings for SQLite
+                    const toSafeValue = (value) => {
+                        if (value === null || value === undefined) return null;
+                        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+                        if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+                        return String(value);
+                    };
+                    
+                    Object.assign(modelData, {
+                        hash_autov2: hash_autov2 || null,
+                        hash_sha256: hash_sha256 || null,
+                        civitai_id: toSafeValue(metadata.modelId || metadata.model?.id),
+                        civitai_version_id: toSafeValue(metadata.modelVersionId || metadata.model?.modelVersionId),
+                        civitai_model_name: toSafeValue(metadata.name || metadata.model?.name),
+                        civitai_model_base: toSafeValue(metadata.baseModel || metadata.model?.baseModel || metadata['sd version']),
+                        civitai_model_type: toSafeValue(metadata.type || metadata.model?.type),
+                        civitai_model_version_name: toSafeValue(metadata.versionName || metadata.name),
+                        civitai_model_version_desc: toSafeValue(metadata.description || metadata.model?.description),
+                        civitai_model_version_date: toSafeValue(metadata.createdAt || metadata.model?.createdAt),
+                        civitai_download_url: toSafeValue(metadata.downloadUrl || metadata.model?.downloadUrl),
+                        civitai_trained_words: toSafeValue(getEnhancedActivationText(metadata)),
+                        civitai_file_size_kb: toSafeValue(metadata.fileSizeKB || metadata['preferred weight'])
+                    });
+                }
+                
+                // Calculate hash if requested and not already present
+                if (calculateHashes && !modelData.hash_autov2) {
+                    try {
+                        const fullModelPath = path.join(modelDir, model.filename);
+                        const fileStats = await fs.stat(fullModelPath);
+                        const sizeCheck = checkFileSizeForHashing(fileStats.size);
+                        
+                        if (sizeCheck.isAllowed) {
+                            console.log(`[ModelScan] Calculating AutoV2 for ${model.filename} (${sizeCheck.sizeInfo.displaySize})`);
+                            const calculatedHash = await calculateFileHash(fullModelPath);
+                            if (calculatedHash) {
+                                modelData.hash_autov2 = calculatedHash;
+                                stats.hashesCalculated++;
+                                console.log(`[ModelScan] Hash calculated: ${calculatedHash}`);
+                            }
+                        } else {
+                            console.log(`[ModelScan] Skipping hash calculation for ${model.filename}: ${sizeCheck.reason}`);
+                            stats.hashesSkipped++;
+                        }
+                    } catch (hashError) {
+                        console.error(`[ModelScan] Hash calculation failed for ${model.filename}:`, hashError);
+                        stats.hashErrors++;
+                    }
+                }
+                
+                // Check for existing model by multiple criteria (proper duplicate detection)
+                let existingModel = null;
+                
+                // First try to find by hash (most reliable)
+                if (modelData.hash_autov2) {
+                    const hashMatches = modelDB.findModelsByHash(modelData.hash_autov2, 'autov2');
+                    if (hashMatches.length > 0) {
+                        existingModel = hashMatches[0];
+                    }
+                } else if (modelData.hash_sha256) {
+                    const hashMatches = modelDB.findModelsByHash(modelData.hash_sha256, 'sha256');
+                    if (hashMatches.length > 0) {
+                        existingModel = hashMatches[0];
+                    }
+                }
+                
+                // If no hash match, try by filename and path
+                if (!existingModel) {
+                    const allModels = modelDB.getAllModels();
+                    existingModel = allModels.find(m => 
+                        m.filename === modelData.filename && 
+                        m.local_path === modelData.local_path
+                    );
+                }
+                
+                if (existingModel) {
+                    // Model exists - check if we have new information
+                    let hasNewInfo = false;
+                    
+                    // Check if metadata is newer or more complete
+                    if (metadata && metadataStatus !== 'none') {
+                        // Compare with existing metadata status
+                        if (existingModel.metadata_status === 'none' || 
+                            (existingModel.metadata_status === 'partial' && metadataStatus === 'complete') ||
+                            (existingModel.metadata_source === 'none' && modelData.metadata_source !== 'none')) {
+                            hasNewInfo = true;
+                        }
+                        
+                        // Check for new hash information
+                        if (!existingModel.hash_autov2 && modelData.hash_autov2) {
+                            hasNewInfo = true;
+                        }
+                        if (!existingModel.hash_sha256 && modelData.hash_sha256) {
+                            hasNewInfo = true;
+                        }
+                        
+                        // Check for new Civitai information
+                        if (!existingModel.civitai_id && modelData.civitai_id) {
+                            hasNewInfo = true;
+                        }
+                        if (!existingModel.civitai_version_id && modelData.civitai_version_id) {
+                            hasNewInfo = true;
+                        }
+                        
+                        // Check for new field-level information from metadata sources (NO INFERENCES)
+                        const fieldsToCheck = [
+                            'civitai_trained_words', 'civitai_model_base', 'civitai_model_type',
+                            'civitai_model_name', 'civitai_model_version_name', 'civitai_model_version_desc',
+                            'civitai_model_version_date', 'civitai_download_url', 'civitai_file_size_kb'
+                        ];
+                        
+                        for (const field of fieldsToCheck) {
+                            // Only update if: existing field is null/empty AND new data has actual content
+                            if ((!existingModel[field] || existingModel[field] === null) && 
+                                modelData[field] && modelData[field] !== null) {
+                                hasNewInfo = true;
+                                console.log(`[ModelScan] New ${field} for ${modelData.filename}: ${modelData[field]}`);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (hasNewInfo) {
+                        // Update existing model with new information
+                        modelData.id = existingModel.id; // Preserve existing ID
+                        try {
                     const modelId = modelDB.addOrUpdateModel(modelData);
                     const serverId = req.headers['x-server-id'] || 'local';
                     modelDB.updateModelServerAvailability(modelId, serverId);
-                    if (metadata) {
+                        } catch (dbError) {
+                            console.error(`[ModelScan] Database update error for ${modelData.filename}:`, dbError.message);
+                            console.error(`[ModelScan] Problematic update modelData:`, JSON.stringify(modelData, null, 2));
+                            throw dbError;
+                        }
+                        
                         stats.updated++;
+                        console.log(`[ModelScan] Updated model: ${modelData.filename} (new ${modelData.metadata_source} metadata)`);
                     } else {
-                        stats.incomplete++;
+                        // No new information, skip
+                        stats.skipped++;
+                        console.log(`[ModelScan] Skipped model: ${modelData.filename} (no new information)`);
+                    }
+                } else {
+                    // New model - add regardless of available parameters
+                    try {
+                        const modelId = modelDB.addOrUpdateModel(modelData);
+                        const serverId = req.headers['x-server-id'] || 'local';
+                        modelDB.updateModelServerAvailability(modelId, serverId);
+                    } catch (dbError) {
+                        console.error(`[ModelScan] Database error for ${modelData.filename}:`, dbError.message);
+                        console.error(`[ModelScan] Problematic modelData:`, JSON.stringify(modelData, null, 2));
+                        throw dbError;
                     }
                     
-                    // Track counts by type
-                    if (modelType === 'checkpoint') {
+                    stats.added++;
+                    
+                    // Track counts by type if we have it
+                    if (modelData.type === 'checkpoint') {
                         stats.checkpoints++;
-                    } else if (modelType === 'lora') {
+                    } else if (modelData.type === 'lora') {
                         stats.loras++;
                     }
                     
-                    console.log(`[ModelScan] Added ${modelType}: ${modelData.filename}`);
+                    const metadataInfo = metadata ? 
+                        `(${metadataStatus} metadata from ${modelData.metadata_source})` : 
+                        '(no metadata)';
+                    console.log(`[ModelScan] Added new model: ${modelData.filename} ${metadataInfo}`);
                 }
             } catch (error) {
                 console.error(`Error processing model ${model.filename}:`, error);
@@ -875,12 +1036,22 @@ router.post('/models/scan', async (req, res) => {
         // Log model count after scan
         const postScanCount = modelDB.getAllModels().length;
         console.log(`[ModelScan] Models in DB after scan: ${postScanCount}`);
-        console.log(`[ModelScan] Scan complete: ${stats.checkpoints} checkpoints, ${stats.loras} LoRAs, ${stats.errors} errors`);
+        
+        let logMessage = `[ModelScan] Scan complete: ${stats.added} added, ${stats.updated} updated, ${stats.skipped} skipped, ${stats.errors} errors`;
+        if (calculateHashes) {
+            logMessage += `, ${stats.hashesCalculated} hashes calculated, ${stats.hashesSkipped} hashes skipped, ${stats.hashErrors} hash errors`;
+        }
+        console.log(logMessage);
+
+        let responseMessage = `Scanned ${stats.total} models: ${stats.added} added, ${stats.updated} updated, ${stats.skipped} skipped`;
+        if (calculateHashes) {
+            responseMessage += `, ${stats.hashesCalculated} hashes calculated`;
+        }
 
         res.json({
             success: true,
             stats,
-            message: `Found ${stats.total} models (${stats.checkpoints} checkpoints, ${stats.loras} LoRAs)`
+            message: responseMessage
         });
     } catch (error) {
         console.error('Error scanning models:', error);
@@ -893,70 +1064,148 @@ router.post('/models/scan', async (req, res) => {
 });
 
 /**
- * Helper function to determine model type based on filename and path
- * @param {Object} model - Model information from scanModelDirectory
- * @param {string} rootPath - Root scanning path
- * @returns {string} Model type ('checkpoint' or 'lora')
- */
-function determineModelType(model, rootPath) {
-    const filename = model.filename.toLowerCase();
-    const relativePath = model.relativePath ? model.relativePath.toLowerCase() : '';
-    
-    // Priority 1: Check file extensions
-    if (filename.includes('.lora.') || filename.endsWith('.lora.safetensors') || filename.endsWith('.lora.pt')) {
-        return 'lora';
-    }
-    
-    // Priority 2: Check directory names in path
-    if (relativePath.includes('lora') || relativePath.includes('loras')) {
-        return 'lora';
-    }
-    
-    // Priority 3: Check for common LoRA patterns in filename
-    const loraPatterns = [
-        'lora', 'style', 'concept', 'character', 'pose', 'clothing', 'embedding',
-        'textual_inversion', 'ti', 'hypernetwork', 'hypernet'
-    ];
-    
-    for (const pattern of loraPatterns) {
-        if (filename.includes(pattern)) {
-            return 'lora';
-        }
-    }
-    
-    // Priority 4: Check directory names for checkpoint indicators
-    if (relativePath.includes('checkpoint') || relativePath.includes('model') || 
-        relativePath.includes('stable-diffusion') || relativePath.includes('sd')) {
-        return 'checkpoint';
-    }
-    
-    // Default: Assume checkpoint for standard model extensions
-    return 'checkpoint';
-}
-
-/**
- * Helper function to read metadata from a model file or its associated .civitai.json
+ * Helper function to read metadata from a model file or its associated JSON files
+ * Priority: Forge-style JSON > Civitai JSON > Embedded metadata
  * @param {Object} model - Model information from scanModelDirectory
  * @returns {Promise<Object|null>} Metadata object or null if not found
  */
 async function readModelMetadata(model) {
+    const { readModelFileMetadata, validateMetadataCompleteness, mergeMetadata } = require('../utils/safetensorsMetadataReader');
+    
     try {
-        // Try to read .civitai.json first
         const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
-        const jsonPath = path.join(model.local_path, `${baseName}.civitai.json`);
+        const modelFilePath = path.join(model.local_path, model.filename);
         
+        let jsonMetadata = null;
+        let jsonSource = null;
+    
+        // Step 1: Try to read Forge-style JSON first (modelname.json)
+        const forgeJsonPath = path.join(model.local_path, `${baseName}.json`);
         try {
-            const jsonData = await fs.readFile(jsonPath, 'utf-8');
-            return JSON.parse(jsonData);
+            const jsonData = await fs.readFile(forgeJsonPath, 'utf-8');
+            const parsedJson = JSON.parse(jsonData);
+            
+            // Validate that it contains model metadata (not just tensor info)
+            if (parsedJson.modelId || parsedJson.model?.id || parsedJson.civitaiVersionId || 
+                parsedJson.name || parsedJson.description || parsedJson.baseModel) {
+                jsonMetadata = parsedJson;
+                jsonSource = 'forge';
+                console.log(`[ModelScan] Found Forge-style metadata: ${forgeJsonPath}`);
+            }
         } catch (err) {
-            // No .civitai.json found, try to read embedded metadata
-            // TODO: Implement embedded metadata reading
-            return null;
+            // Forge JSON not found or invalid
+    }
+    
+        // Step 2: If no Forge JSON, try Civitai-style JSON (.civitai.json)
+        if (!jsonMetadata) {
+            const civitaiJsonPath = path.join(model.local_path, `${baseName}.civitai.json`);
+            try {
+                const jsonData = await fs.readFile(civitaiJsonPath, 'utf-8');
+                const parsedJson = JSON.parse(jsonData);
+                
+                if (validateMetadataCompleteness(parsedJson)) {
+                    jsonMetadata = parsedJson;
+                    jsonSource = 'civitai';
+                    console.log(`[ModelScan] Found Civitai-style metadata: ${civitaiJsonPath}`);
+                }
+            } catch (err) {
+                // Civitai JSON not found or invalid
+            }
         }
+        
+        // Step 3: Try to read embedded metadata from the model file
+        let embeddedMetadata = null;
+        try {
+            embeddedMetadata = await readModelFileMetadata(modelFilePath);
+            if (embeddedMetadata) {
+                console.log(`[ModelScan] Found embedded metadata in: ${modelFilePath}`);
+            }
+        } catch (err) {
+            console.warn(`[ModelScan] Could not read embedded metadata from ${modelFilePath}: ${err.message}`);
+        }
+        
+        // Step 4: Merge metadata sources (JSON takes priority)
+        if (jsonMetadata || embeddedMetadata) {
+            const mergedMetadata = mergeMetadata(jsonMetadata, embeddedMetadata);
+            
+            // Add metadata source information for debugging
+            mergedMetadata._json_source = jsonSource;
+            mergedMetadata._has_embedded = !!embeddedMetadata;
+            mergedMetadata._complete = validateMetadataCompleteness(mergedMetadata);
+            
+            return mergedMetadata;
+        }
+        
+        // Step 5: No metadata found anywhere
+        console.log(`[ModelScan] No metadata found for ${model.filename}`);
+        return null;
+        
     } catch (error) {
-        console.error(`Error reading metadata for ${model.filename}:`, error);
+        console.error(`[ModelScan] Error reading metadata for ${model.filename}:`, error);
         return null;
     }
+}
+
+/**
+ * Enhanced activation text extraction from multiple metadata sources
+ * Priority: JSON trainedWords/activation text > Rich tag frequency data > Simple fallback
+ * @param {Object} metadata - Merged metadata from all sources
+ * @returns {string|null} Enhanced activation text or null if not found
+ */
+function getEnhancedActivationText(metadata) {
+    // Priority 1: JSON explicit fields (trainedWords or activation text)
+    if (metadata.trainedWords || metadata['activation text']) {
+        return metadata.trainedWords || metadata['activation text'];
+    }
+    
+    // Priority 2: Rich tag frequency data from embedded metadata
+    if (metadata.ss_tag_frequency) {
+        try {
+            let tagFrequency = metadata.ss_tag_frequency;
+            
+            // Parse if it's a JSON string
+            if (typeof tagFrequency === 'string') {
+                tagFrequency = JSON.parse(tagFrequency);
+            }
+            
+            // Extract tags from the frequency data
+            if (tagFrequency && typeof tagFrequency === 'object') {
+                // Look for the main tag group (usually "img" or similar)
+                const tagGroups = Object.keys(tagFrequency);
+                if (tagGroups.length > 0) {
+                    const mainGroup = tagFrequency[tagGroups[0]];
+                    if (mainGroup && typeof mainGroup === 'object') {
+                        // Get tags sorted by frequency (most common first)
+                        const sortedTags = Object.entries(mainGroup)
+                            .sort(([,a], [,b]) => b - a)
+                            .map(([tag, count]) => ({ tag, count }));
+                        
+                        if (sortedTags.length > 0) {
+                            // Use the most frequent tag as primary, or combine top tags
+                            const primaryTag = sortedTags[0].tag;
+                            
+                            // If we have multiple high-frequency tags, combine them
+                            const highFreqTags = sortedTags
+                                .filter(({ count }) => count >= Math.max(2, sortedTags[0].count * 0.5))
+                                .map(({ tag }) => tag)
+                                .slice(0, 3); // Limit to top 3 tags
+                            
+                            if (highFreqTags.length > 1) {
+                                return highFreqTags.join(', ');
+                            } else {
+                                return primaryTag;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn(`[ModelScan] Could not parse ss_tag_frequency for enhanced activation text: ${error.message}`);
+        }
+    }
+    
+    // Priority 3: No enhanced activation text found
+    return null;
 }
 
 // Helper function to extract base model from metadata
@@ -1143,6 +1392,342 @@ router.get('/models/:id/availability', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to get model availability',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/v1/models/:id/fetch-from-civitai
+ * Fetches missing metadata and preview image from Civitai using model hash
+ */
+router.post('/models/:id/fetch-from-civitai', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        console.log(`[Models] Fetch from Civitai requested for model ID: ${modelId}`);
+        
+        // Get the model from database
+        const existingModel = modelDB.getAllModels().find(m => m.id == modelId);
+        if (!existingModel) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found'
+            });
+        }
+        
+        console.log(`[Models] Found model: ${existingModel.filename}`);
+        
+        // Check if we have a hash to query with
+        const hash = existingModel.hash_autov2 || existingModel.hash_sha256;
+        if (!hash) {
+            return res.status(400).json({
+                success: false,
+                message: 'Model has no hash available for Civitai lookup'
+            });
+        }
+        
+        console.log(`[Models] Using hash for Civitai lookup: ${hash.substring(0, 16)}...`);
+        
+        // Query Civitai API by hash
+        const civitaiUrl = `https://civitai.com/api/v1/model-versions/by-hash/${hash}`;
+        const civitaiHeaders = {
+            'Accept': 'application/json',
+            'User-Agent': 'StableQueue/1.0'
+        };
+        
+        // Add API key if available
+        if (process.env.CIVITAI_API_KEY) {
+            civitaiHeaders['Authorization'] = `Bearer ${process.env.CIVITAI_API_KEY}`;
+        }
+        
+        console.log(`[Models] Querying Civitai: ${civitaiUrl}`);
+        const civitaiResponse = await rateLimitedCivitaiRequest(civitaiUrl, {
+            headers: civitaiHeaders
+        });
+        
+        if (!civitaiResponse || !civitaiResponse.data) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found on Civitai'
+            });
+        }
+        
+        const versionData = civitaiResponse.data;
+        console.log(`[Models] Found Civitai data for model: ${versionData.model.name}`);
+        
+        // Extract metadata from Civitai response
+        const updatedMetadata = {
+            civitai_id: versionData.modelId || versionData.model.id,
+            civitai_version_id: versionData.id,
+            civitai_model_name: versionData.model.name,
+            civitai_model_base: versionData.baseModel,
+            civitai_model_type: versionData.model.type,
+            civitai_model_version_name: versionData.name,
+            civitai_model_version_desc: versionData.description,
+            civitai_model_version_date: versionData.createdAt,
+            civitai_download_url: versionData.downloadUrl,
+            civitai_trained_words: versionData.trainedWords ? JSON.stringify(versionData.trainedWords) : null,
+            metadata_status: 'complete',
+            metadata_source: 'civitai'
+        };
+        
+        // Extract file information for additional metadata
+        if (versionData.files && versionData.files.length > 0) {
+            const mainFile = versionData.files.find(f => 
+                f.name && (f.name.endsWith('.safetensors') || f.name.endsWith('.ckpt'))
+            );
+            if (mainFile) {
+                if (mainFile.hashes) {
+                    if (mainFile.hashes.AutoV2) updatedMetadata.hash_autov2 = mainFile.hashes.AutoV2;
+                    if (mainFile.hashes.SHA256) updatedMetadata.hash_sha256 = mainFile.hashes.SHA256;
+                }
+                if (mainFile.sizeKB) {
+                    updatedMetadata.civitai_file_size_kb = mainFile.sizeKB;
+                }
+            }
+        }
+        
+        // Update the model in the database
+        const updateData = {
+            ...existingModel,
+            ...updatedMetadata
+        };
+        
+        modelDB.addOrUpdateModel(updateData);
+        console.log(`[Models] Updated model metadata in database`);
+        
+        // Try to download preview image if available and we don't have one
+        let previewDownloaded = false;
+        if (versionData.images && versionData.images.length > 0) {
+            const previewImage = versionData.images[0]; // Use first image as preview
+            
+            if (previewImage.url) {
+                try {
+                    // Construct preview save path
+                    const modelDir = path.join(existingModel.local_path);
+                    const baseName = existingModel.filename.substring(0, existingModel.filename.lastIndexOf('.'));
+                    const previewPath = path.join(modelDir, `${baseName}.preview.png`);
+                    
+                    // Check if preview already exists
+                    const previewExists = fs.existsSync ? fs.existsSync(previewPath) : false;
+                    
+                    if (!previewExists) {
+                        console.log(`[Models] Downloading preview image from: ${previewImage.url}`);
+                        
+                        // Download the image
+                        const imageResponse = await rateLimitedCivitaiRequest(previewImage.url, {
+                            responseType: 'stream'
+                        });
+                        
+                        if (imageResponse && imageResponse.data) {
+                            // Ensure directory exists
+                            await fsp.mkdir(modelDir, { recursive: true });
+                            
+                            // Save the image
+                            const writeStream = fsSync.createWriteStream(previewPath);
+                            imageResponse.data.pipe(writeStream);
+                            
+                            await new Promise((resolve, reject) => {
+                                writeStream.on('finish', resolve);
+                                writeStream.on('error', reject);
+                            });
+                            
+                            previewDownloaded = true;
+                            console.log(`[Models] Preview image saved to: ${previewPath}`);
+                        }
+                    } else {
+                        console.log(`[Models] Preview image already exists: ${previewPath}`);
+                    }
+                } catch (imageError) {
+                    console.error(`[Models] Failed to download preview image:`, imageError);
+                    // Don't fail the whole request for image download errors
+                }
+            }
+        }
+        
+        // Return success response
+        res.json({
+            success: true,
+            message: `Successfully fetched metadata from Civitai${previewDownloaded ? ' and downloaded preview image' : ''}`,
+            metadata: {
+                model_name: versionData.model.name,
+                version_name: versionData.name,
+                base_model: versionData.baseModel,
+                civitai_id: versionData.modelId || versionData.model.id,
+                civitai_version_id: versionData.id,
+                preview_downloaded: previewDownloaded,
+                trained_words: versionData.trainedWords || []
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error fetching from Civitai:', error);
+        
+        // Handle specific error cases
+        if (error.response?.status === 404) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found on Civitai'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch metadata from Civitai',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/v1/models/:id/calculate-hash
+ * Calculate AutoV2 hash for a model file
+ */
+router.post('/models/:id/calculate-hash', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        console.log(`[Models] Hash calculation requested for model ID: ${modelId}`);
+        
+        // Get the model from database
+        const existingModel = modelDB.getAllModels().find(m => m.id == modelId);
+        if (!existingModel) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found'
+            });
+        }
+        
+        console.log(`[Models] Found model: ${existingModel.filename}`);
+        
+        // Check if model already has an AutoV2 hash
+        if (existingModel.hash_autov2) {
+            return res.status(400).json({
+                success: false,
+                message: 'Model already has an AutoV2 hash',
+                hash: existingModel.hash_autov2
+            });
+        }
+        
+        // Construct full file path
+        const fullPath = path.join(existingModel.local_path, existingModel.filename);
+        
+        // Check if file exists
+        try {
+            await fs.access(fullPath);
+        } catch (err) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model file not found on disk'
+            });
+        }
+        
+        // Get file stats and check size limits
+        const stats = await fs.stat(fullPath);
+        const sizeCheck = checkFileSizeForHashing(stats.size);
+        
+        if (!sizeCheck.isAllowed) {
+            return res.status(400).json({
+                success: false,
+                message: sizeCheck.reason,
+                fileSize: sizeCheck.sizeInfo.displaySize
+            });
+        }
+        
+        console.log(`[Models] Starting hash calculation for ${existingModel.filename} (${sizeCheck.sizeInfo.displaySize})`);
+        console.log(`[Models] Estimated time: ${formatDuration(sizeCheck.sizeInfo.estimatedTime)}`);
+        
+        // Calculate hash
+        const startTime = Date.now();
+        const hash = await calculateFileHash(fullPath);
+        const calculationTime = (Date.now() - startTime) / 1000;
+        
+        // Update model in database
+        const updateData = {
+            ...existingModel,
+            hash_autov2: hash
+        };
+        
+        modelDB.addOrUpdateModel(updateData);
+        console.log(`[Models] Updated model with AutoV2 hash: ${hash}`);
+        
+        res.json({
+            success: true,
+            message: 'Hash calculated successfully',
+            hash: hash,
+            fileSize: sizeCheck.sizeInfo.displaySize,
+            calculationTime: formatDuration(calculationTime)
+        });
+        
+    } catch (error) {
+        console.error('Error calculating hash:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to calculate hash',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/v1/models/:id/hash-info
+ * Get hash calculation information for a model (file size, estimated time, etc.)
+ */
+router.get('/models/:id/hash-info', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        
+        // Get the model from database
+        const existingModel = modelDB.getAllModels().find(m => m.id == modelId);
+        if (!existingModel) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found'
+            });
+        }
+        
+        // Construct full file path
+        const fullPath = path.join(existingModel.local_path, existingModel.filename);
+        
+        // Check if file exists
+        try {
+            await fs.access(fullPath);
+        } catch (err) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model file not found on disk'
+            });
+        }
+        
+        // Get file stats and check size limits
+        const stats = await fs.stat(fullPath);
+        const sizeCheck = checkFileSizeForHashing(stats.size);
+        
+        const response = {
+            success: true,
+            model: {
+                id: existingModel.id,
+                filename: existingModel.filename,
+                hasHash: !!existingModel.hash_autov2,
+                existingHash: existingModel.hash_autov2 || null
+            },
+            fileInfo: {
+                size: sizeCheck.sizeInfo.displaySize,
+                sizeBytes: stats.size,
+                canCalculateHash: sizeCheck.isAllowed,
+                reason: sizeCheck.reason,
+                estimatedTime: sizeCheck.sizeInfo.estimatedTime,
+                estimatedTimeDisplay: sizeCheck.sizeInfo.estimatedTime ? 
+                    formatDuration(sizeCheck.sizeInfo.estimatedTime) : null
+            }
+        };
+        
+        res.json(response);
+        
+    } catch (error) {
+        console.error('Error getting hash info:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get hash information',
             error: error.message
         });
     }

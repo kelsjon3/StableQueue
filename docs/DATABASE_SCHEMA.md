@@ -92,8 +92,8 @@ Comprehensive model metadata storage with Civitai integration.
 ```sql
 CREATE TABLE IF NOT EXISTS models (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL CHECK (type IN ('checkpoint', 'lora')),
+    name TEXT,
+    type TEXT CHECK (type IN ('checkpoint', 'lora') OR type IS NULL),
     local_path TEXT NOT NULL,
     filename TEXT NOT NULL,
     civitai_id TEXT,
@@ -124,7 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_models_hashes ON models (hash_autov2, hash_sha256
 **Field Descriptions:**
 - `id`: Auto-increment primary key
 - `name`: Display name of the model
-- `type`: Model type (checkpoint or lora)
+- `type`: Model type (checkpoint, lora, or null if unknown)
 - `local_path`: Full file system path to model file
 - `filename`: Base filename of the model
 - `civitai_id`: Civitai model ID for API integration
@@ -142,8 +142,66 @@ CREATE INDEX IF NOT EXISTS idx_models_hashes ON models (hash_autov2, hash_sha256
 - `civitai_trained_words`: Trigger words for the model
 - `civitai_file_size_kb`: File size in kilobytes
 - `metadata_status`: Status of Civitai metadata enrichment
+- `metadata_source`: Source of metadata (forge/civitai/embedded/none)
+- `has_embedded_metadata`: Boolean flag for embedded metadata presence
 - `last_used`: Timestamp of last model usage
 - `created_at`: Timestamp of database record creation
+
+### Model Parameters Example
+
+Here's an example of all 24 parameters stored for a LoRA model (`0859 library_v1_pony.safetensors`):
+
+```json
+{
+  "id": 275,
+  "name": "0859 library_v1_pony.safetensors",
+  "type": "lora",
+  "local_path": "/app/models/loras/Pony",
+  "filename": "0859 library_v1_pony.safetensors",
+  "civitai_id": "651553.0",
+  "civitai_version_id": "728915.0",
+  "forge_format": null,
+  "hash_autov2": null,
+  "hash_sha256": "4FEAADF2925367C7C8C67A43888BAB274C1306672EC82CED8FDD15F196135073",
+  "civitai_model_name": null,
+  "civitai_model_base": null,
+  "civitai_model_type": null,
+  "civitai_model_version_name": null,
+  "civitai_model_version_desc": null,
+  "civitai_model_version_date": null,
+  "civitai_download_url": null,
+  "civitai_trained_words": "ruanyi0859",
+  "civitai_file_size_kb": null,
+  "metadata_status": "complete",
+  "metadata_source": "forge",
+  "has_embedded_metadata": 1,
+  "last_used": "2025-06-14 02:56:15",
+  "created_at": "2025-06-14 02:56:15"
+}
+```
+
+### Metadata Source Priority
+
+StableQueue follows a strict hierarchy for metadata extraction:
+
+1. **Forge-style JSON** (`modelname.json`) - **Highest Priority**
+2. **Civitai-style JSON** (`modelname.civitai.json`) - **Medium Priority**  
+3. **Embedded Metadata** (from safetensors file) - **Lowest Priority**
+
+The system merges data from these sources with JSON taking precedence over embedded metadata. **No inferences are made** - only explicit data from these sources is used.
+
+### Enhanced Features
+
+**Type Extraction**: The `type` field is automatically populated from:
+- Explicit `type` field in JSON metadata, OR
+- Extracted from `modelspec.architecture` in embedded metadata:
+  - `"flux-1-dev/lora"` → `"lora"`
+  - `"flux-1-dev/checkpoint"` → `"checkpoint"`
+
+**Enhanced Activation Text**: The `civitai_trained_words` field uses a priority system:
+- JSON `trainedWords` or `activation text` fields (highest priority)
+- Rich tag frequency data from embedded `ss_tag_frequency` (fallback)
+- Combines multiple high-frequency tags intelligently when using embedded data
 
 ### `model_aliases` Table
 Alternative path mappings for model matching.
