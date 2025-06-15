@@ -277,7 +277,7 @@ class DownloadQueueManager extends EventEmitter {
       
       // Final path
         // Use the same filename logic as the main download
-        let finalFilename = download.targetFilename;
+        finalFilename = download.targetFilename;
         if (!finalFilename) {
           const urlPath = new URL(download.downloadUrl).pathname;
           finalFilename = path.basename(urlPath);
@@ -300,10 +300,6 @@ class DownloadQueueManager extends EventEmitter {
         url: download.downloadUrl,
        responseType: 'stream',
        cancelToken: cancelSource.token
-      });
-      
-     // Store cancel source for potential cancellation
-     download.cancelSource = cancelSource;
       });
       
      // Store cancel source for potential cancellation

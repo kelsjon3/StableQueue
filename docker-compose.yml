@@ -8,15 +8,15 @@ services:
       - "8083:3000"
     volumes:
       - ./data:/usr/src/app/data
-      - /mnt/user/Stable_Diffusion_Data/models:/app/models
-      - /mnt/user/Stable_Diffusion_Data/outputs:/app/outputs
+      - ${HOST_MODEL_PATH:-/mnt/user/Stable_Diffusion_Data/models}:${MODEL_PATH:-/app/models}
+      - ${HOST_OUTPUT_PATH:-/mnt/user/Stable_Diffusion_Data/outputs}:${STABLE_DIFFUSION_SAVE_PATH:-/app/outputs}
+    env_file:
+      - .env
     environment:
-      - PORT=3000
-      - CONFIG_DATA_PATH=/usr/src/app/data
-      - STABLE_DIFFUSION_SAVE_PATH=/app/outputs
-      - MODEL_PATH=/app/models
-      - MODELS_PATH=/app/models
-      - LORA_PATH=/app/models/Lora
-      - CHECKPOINT_PATH=/app/models/Stable-diffusion
-      - NODE_ENV=development
+      - PORT=${PORT:-3000}
+      - CONFIG_DATA_PATH=${CONFIG_DATA_PATH:-/usr/src/app/data}
+      - MODEL_PATH=${MODEL_PATH:-/app/models}
+      - STABLE_DIFFUSION_SAVE_PATH=${STABLE_DIFFUSION_SAVE_PATH:-/app/outputs}
+      - CIVITAI_API_KEY=${CIVITAI_API_KEY}
+      - NODE_ENV=${NODE_ENV:-development}
     restart: unless-stopped

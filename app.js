@@ -15,6 +15,7 @@ const v2GenerationRouter = require('./routes/v2Generation');
 const apiKeysRouter = require('./routes/apiKeys');
 const galleryRouter = require('./routes/gallery');
 const settingsRouter = require('./routes/settings');
+const civitaiRouter = require('./routes/civitai');
 const forgeJobMonitor = require('./services/forgeJobMonitor');
 const jobStatusManager = require('./services/jobStatusManager');
 const modelsRouter = require('./routes/models');
@@ -71,6 +72,7 @@ app.use('/api/v1', generationRouter);
 app.use('/api/v1/gallery', galleryRouter);
 app.use('/api/v1/api-keys', apiKeysRouter);
 app.use('/api/v1/settings', settingsRouter);
+app.use('/api/v1', civitaiRouter);
 app.use('/api/v2', v2GenerationRouter);
 app.use('/api/v1', modelsRouter);
 

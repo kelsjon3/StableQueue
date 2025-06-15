@@ -897,31 +897,6 @@ router.post('/models/scan', async (req, res) => {
                     });
                 }
                 
-                // Calculate hash if requested and not already present
-                if (calculateHashes && !modelData.hash_autov2) {
-                    try {
-                        const fullModelPath = path.join(modelDir, model.filename);
-                        const fileStats = await fs.stat(fullModelPath);
-                        const sizeCheck = checkFileSizeForHashing(fileStats.size);
-                        
-                        if (sizeCheck.isAllowed) {
-                            console.log(`[ModelScan] Calculating AutoV2 for ${model.filename} (${sizeCheck.sizeInfo.displaySize})`);
-                            const calculatedHash = await calculateFileHash(fullModelPath);
-                            if (calculatedHash) {
-                                modelData.hash_autov2 = calculatedHash;
-                                stats.hashesCalculated++;
-                                console.log(`[ModelScan] Hash calculated: ${calculatedHash}`);
-                            }
-                        } else {
-                            console.log(`[ModelScan] Skipping hash calculation for ${model.filename}: ${sizeCheck.reason}`);
-                            stats.hashesSkipped++;
-                        }
-                    } catch (hashError) {
-                        console.error(`[ModelScan] Hash calculation failed for ${model.filename}:`, hashError);
-                        stats.hashErrors++;
-                    }
-                }
-                
                 // Check for existing model by multiple criteria (proper duplicate detection)
                 let existingModel = null;
                 
@@ -946,54 +921,103 @@ router.post('/models/scan', async (req, res) => {
                         m.local_path === modelData.local_path
                     );
                 }
+
+                // Calculate hash if requested and needed (for new models OR existing models missing hashes)
+                if (calculateHashes && (!modelData.hash_autov2 || (existingModel && !existingModel.hash_autov2))) {
+                    try {
+                        const fullModelPath = path.join(modelDir, model.filename);
+                        const fileStats = await fs.stat(fullModelPath);
+                        const sizeCheck = checkFileSizeForHashing(fileStats.size);
+                        
+                        if (sizeCheck.isAllowed) {
+                            console.log(`[ModelScan] Calculating AutoV2 for ${model.filename} (${sizeCheck.sizeInfo.displaySize})`);
+                            const calculatedHash = await calculateFileHash(fullModelPath);
+                            if (calculatedHash) {
+                                modelData.hash_autov2 = calculatedHash;
+                                stats.hashesCalculated++;
+                                console.log(`[ModelScan] Hash calculated: ${calculatedHash}`);
+                            }
+                        } else {
+                            console.log(`[ModelScan] Skipping hash calculation for ${model.filename}: ${sizeCheck.reason}`);
+                            stats.hashesSkipped++;
+                        }
+                    } catch (hashError) {
+                        console.error(`[ModelScan] Hash calculation failed for ${model.filename}:`, hashError);
+                        stats.hashErrors++;
+                    }
+                }
                 
                 if (existingModel) {
-                    // Model exists - check if we have new information
+                    // Model exists - check ALL fields for null values and potential population
                     let hasNewInfo = false;
                     
-                    // Check if metadata is newer or more complete
+                    // Enhanced debug logging - show full objects
+                    console.log(`\n[ModelScan] ======= COMPREHENSIVE DEBUG FOR ${modelData.filename} =======`);
+                    console.log(`[ModelScan] Metadata found: ${!!metadata}`);
+                    console.log(`[ModelScan] Metadata status: ${metadataStatus}`);
+                    console.log(`[ModelScan] Metadata source: ${modelData.metadata_source}`);
+                    
+                    // Show key existing model fields
+                    console.log(`[ModelScan] EXISTING MODEL KEY FIELDS:`);
+                    console.log(`  type: "${existingModel.type}"`);
+                    console.log(`  hash_autov2: "${existingModel.hash_autov2}"`);
+                    console.log(`  metadata_status: "${existingModel.metadata_status}"`);
+                    console.log(`  metadata_source: "${existingModel.metadata_source}"`);
+                    console.log(`  has_embedded_metadata: "${existingModel.has_embedded_metadata}"`);
+                    
+                    // Show key new model fields
+                    console.log(`[ModelScan] NEW MODEL DATA KEY FIELDS:`);
+                    console.log(`  type: "${modelData.type}"`);
+                    console.log(`  hash_autov2: "${modelData.hash_autov2}"`);
+                    console.log(`  metadata_status: "${modelData.metadata_status}"`);
+                    console.log(`  metadata_source: "${modelData.metadata_source}"`);
+                    console.log(`  has_embedded_metadata: "${modelData.has_embedded_metadata}"`);
+                    
+                    // Always check metadata status improvements
                     if (metadata && metadataStatus !== 'none') {
-                        // Compare with existing metadata status
                         if (existingModel.metadata_status === 'none' || 
                             (existingModel.metadata_status === 'partial' && metadataStatus === 'complete') ||
                             (existingModel.metadata_source === 'none' && modelData.metadata_source !== 'none')) {
                             hasNewInfo = true;
-                        }
-                        
-                        // Check for new hash information
-                        if (!existingModel.hash_autov2 && modelData.hash_autov2) {
-                            hasNewInfo = true;
-                        }
-                        if (!existingModel.hash_sha256 && modelData.hash_sha256) {
-                            hasNewInfo = true;
-                        }
-                        
-                        // Check for new Civitai information
-                        if (!existingModel.civitai_id && modelData.civitai_id) {
-                            hasNewInfo = true;
-                        }
-                        if (!existingModel.civitai_version_id && modelData.civitai_version_id) {
-                            hasNewInfo = true;
-                        }
-                        
-                        // Check for new field-level information from metadata sources (NO INFERENCES)
-                        const fieldsToCheck = [
-                            'civitai_trained_words', 'civitai_model_base', 'civitai_model_type',
-                            'civitai_model_name', 'civitai_model_version_name', 'civitai_model_version_desc',
-                            'civitai_model_version_date', 'civitai_download_url', 'civitai_file_size_kb',
-                            'civitai_nsfw', 'civitai_blurhash'
-                        ];
-                        
-                        for (const field of fieldsToCheck) {
-                            // Only update if: existing field is null/empty AND new data has actual content
-                            if ((!existingModel[field] || existingModel[field] === null) && 
-                                modelData[field] && modelData[field] !== null) {
-                                hasNewInfo = true;
-                                console.log(`[ModelScan] New ${field} for ${modelData.filename}: ${modelData[field]}`);
-                                break;
-                            }
+                            console.log(`[ModelScan] ✓ Metadata status improvement detected for ${modelData.filename}`);
                         }
                     }
+                    
+                    // Comprehensive field checking - check ALL database fields for null values
+                    const allFieldsToCheck = [
+                        'name', 'type', 'hash_autov2', 'hash_sha256',
+                        'civitai_id', 'civitai_version_id', 'civitai_model_name', 'civitai_model_base', 
+                        'civitai_model_type', 'civitai_model_version_name', 'civitai_model_version_desc',
+                        'civitai_model_version_date', 'civitai_download_url', 'civitai_trained_words',
+                        'civitai_file_size_kb', 'civitai_nsfw', 'civitai_blurhash',
+                        'metadata_status', 'metadata_source', 'has_embedded_metadata'
+                    ];
+                    
+                    console.log(`[ModelScan] FIELD-BY-FIELD COMPARISON:`);
+                    let fieldsWithNewInfo = [];
+                    
+                    for (const field of allFieldsToCheck) {
+                        // Check if existing field is null/empty AND new data has actual content
+                        const existingValue = existingModel[field];
+                        const newValue = modelData[field];
+                        
+                        const isExistingNull = (existingValue === null || existingValue === undefined || existingValue === '');
+                        const hasNewValue = (newValue !== null && newValue !== undefined && newValue !== '');
+                        
+                        // Debug every single field comparison
+                        console.log(`  ${field}: existing="${existingValue}" → new="${newValue}" (existingNull=${isExistingNull}, hasNew=${hasNewValue})`);
+                        
+                        if (isExistingNull && hasNewValue) {
+                            hasNewInfo = true;
+                            fieldsWithNewInfo.push(field);
+                            console.log(`[ModelScan] ✓ Found new data for field "${field}": ${newValue}`);
+                        }
+                    }
+                    
+                    console.log(`[ModelScan] SUMMARY:`);
+                    console.log(`  Fields with new info: [${fieldsWithNewInfo.join(', ')}]`);
+                    console.log(`  hasNewInfo: ${hasNewInfo}`);
+                    console.log(`[ModelScan] ======= END DEBUG FOR ${modelData.filename} =======\n`);
                     
                     if (hasNewInfo) {
                         // Update existing model with new information
@@ -1009,11 +1033,11 @@ router.post('/models/scan', async (req, res) => {
                         }
                         
                         stats.updated++;
-                        console.log(`[ModelScan] Updated model: ${modelData.filename} (new ${modelData.metadata_source} metadata)`);
+                        console.log(`[ModelScan] ✓ Updated model: ${modelData.filename} (new ${modelData.metadata_source} metadata, ${fieldsWithNewInfo.length} fields updated)`);
                     } else {
                         // No new information, skip
                         stats.skipped++;
-                        console.log(`[ModelScan] Skipped model: ${modelData.filename} (no new information)`);
+                        console.log(`[ModelScan] ✗ Skipped model: ${modelData.filename} (no new information)`);
                     }
                 } else {
                     // New model - add regardless of available parameters
@@ -1108,7 +1132,7 @@ async function readModelMetadata(model) {
             }
         } catch (err) {
             // Forge JSON not found or invalid
-    }
+        }
     
         // Step 2: If no Forge JSON, try Civitai-style JSON (.civitai.json)
         if (!jsonMetadata) {

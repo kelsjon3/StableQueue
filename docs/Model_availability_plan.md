@@ -18,6 +18,8 @@
 - [x] **Comprehensive model scanning** with recursive directory support
 - [x] **Automatic hash calculation** during model scanning operations
 - [x] **Preview image management** with multiple format support
+- [x] **Comprehensive debug logging** for model scanning operations
+- [x] **Enhanced field-by-field comparison** for existing model updates
 
 ### ✅ **IMPLEMENTED** - Model Availability API
 - [x] **Model specification by hash** (AutoV2 hash primary, SHA256 backup)
@@ -36,6 +38,9 @@
 - [ ] **UI availability indicators** in job queue interface
 
 ### ❌ **NOT YET IMPLEMENTED** - Advanced Features
+- [ ] **Simplified configuration** - migrate from CHECKPOINT_PATH/LORA_PATH to single MODEL_PATH
+- [ ] **Remove metadata status complexity** - use simple null column checking instead
+- [ ] **Hash-only duplicate detection** - remove filename+path fallback matching
 - [ ] **Automatic model download triggers**
 - [ ] **Server inventory sync API endpoints** (for Forge extensions)
 - [ ] **Job queue UI model availability indicators**
@@ -221,4 +226,224 @@ Based on the current implementation, here are the specific steps to complete the
 - [ ] Create model availability notifications and alert system
 - [ ] Develop predictive model availability analytics and reporting
 
-**For detailed database schema information, see [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)** 
+**For detailed database schema information, see [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)**
+
+## What Happens When the User Clicks 'Scan for New Models'
+
+The model scanning functionality is a comprehensive process that discovers, analyzes, and catalogs all AI models in the configured directories. This section details the complete workflow from user action to database update.
+
+### 🎯 User Interface Flow
+
+#### **1. User Action**
+- User navigates to the **Models** tab in the StableQueue web interface
+- Clicks the **"Scan for New Models"** button
+- **Optional**: Checks "Calculate Hashes" checkbox for hash computation
+
+#### **2. Frontend Response**
+- Button becomes disabled and text changes to:
+  - `"Scanning..."` (metadata only)
+  - `"Scanning + Calculating Hashes..."` (with hash calculation)
+- Makes `POST /api/v1/models/scan` API call with options
+
+#### **3. Results Display**
+- Shows success message with detailed statistics
+- Refreshes the models display to show newly discovered models
+- Re-enables the scan button
+
+### 🔍 Backend Processing Workflow
+
+#### **Phase 1: Directory Discovery**
+```javascript
+// Configuration - single MODEL_PATH only
+const modelPath = process.env.MODEL_PATH;
+
+// Recursive scanning of all subdirectories
+const allModels = await scanModelDirectory(modelPath, MODEL_EXTENSIONS, modelPath);
+```
+
+**What happens**:
+- Scans the configured `MODEL_PATH` recursively
+- Discovers all files with extensions: `.safetensors`, `.pt`, `.ckpt`
+- Builds file inventory with relative paths from root directory
+- Detects associated preview images (`{modelname}.preview.jpeg`)
+
+#### **Phase 2: Metadata Extraction Hierarchy**
+
+**For each discovered model file, follows strict priority order**:
+
+1. **🥇 Forge-style JSON** (`{modelname}.json`) - **HIGHEST PRIORITY**
+   ```javascript
+   // Must contain actual model metadata
+   if (parsedJson.modelId || parsedJson.model?.id || parsedJson.name || parsedJson.description) {
+       jsonMetadata = parsedJson;
+       jsonSource = 'forge';
+   }
+   ```
+
+2. **🥈 Civitai-style JSON** (`{modelname}.civitai.json`) - **MEDIUM PRIORITY**
+   ```javascript
+   if (validateMetadataCompleteness(parsedJson)) {
+       jsonMetadata = parsedJson;
+       jsonSource = 'civitai';
+   }
+   ```
+
+3. **🥉 Embedded Metadata** (from safetensors file) - **LOWEST PRIORITY**
+   ```javascript
+   embeddedMetadata = await readModelFileMetadata(modelFilePath);
+   // Uses custom safetensors parser for embedded data
+   ```
+
+#### **Phase 3: Data Processing & Enrichment**
+
+**Creates comprehensive model data object**:
+- **26+ database fields** populated from metadata sources
+- **Model type detection** from metadata or architecture patterns
+- **Hash extraction** from existing metadata (AutoV2, SHA256)
+- **Complex value conversion** to SQLite-safe strings
+
+**Example field mapping**:
+```javascript
+modelData = {
+    name: model.filename,
+    type: extractedType, // 'checkpoint', 'lora', or null
+    hash_autov2: metadata.hash_autov2 || metadata.AutoV2,
+    civitai_id: metadata.modelId || metadata.model?.id,
+    civitai_trained_words: getEnhancedActivationText(metadata),
+    metadata_source: jsonSource || 'embedded' || 'none',
+    has_embedded_metadata: !!embeddedMetadata
+    // ... 20+ additional fields
+};
+```
+
+#### **Phase 4: Duplicate Detection & Resolution**
+
+**Hash-only matching strategy**:
+```javascript
+// Check for existing model by hash only (most reliable)
+if (modelData.hash_autov2) {
+    existingModel = modelDB.findModelsByHash(modelData.hash_autov2, 'autov2')[0];
+} else if (modelData.hash_sha256) {
+    existingModel = modelDB.findModelsByHash(modelData.hash_sha256, 'sha256')[0];
+}
+```
+
+#### **Phase 5: Hash Calculation (Optional)**
+
+**If "Calculate Hashes" is enabled**:
+```javascript
+// Calculate AutoV2 and/or SHA256 hash if either column is null
+if (calculateHashes && (!modelData.hash_autov2 || !modelData.hash_sha256)) {
+    const sizeCheck = checkFileSizeForHashing(fileStats.size);
+    if (sizeCheck.isAllowed) {
+        const calculatedHash = await calculateFileHash(fullModelPath);
+        modelData.hash_autov2 = calculatedHash.autov2;
+        modelData.hash_sha256 = calculatedHash.sha256;
+    }
+}
+```
+
+**Safety mechanisms**:
+- **File size limits** to prevent system overload
+- **Time estimates** shown to user for large files
+- **Error handling** for corrupted or inaccessible files
+- **Statistics tracking**: calculated, skipped, errors
+
+#### **Phase 6: Database Operations**
+
+##### **For Existing Models**:
+**Enhanced field-by-field comparison**:
+```javascript
+const allFieldsToCheck = [
+    'name', 'type', 'hash_autov2', 'hash_sha256',
+    'civitai_id', 'civitai_version_id', 'civitai_model_name', // ... 24+ fields
+];
+
+for (const field of allFieldsToCheck) {
+    const isExistingNull = (existingValue === null || existingValue === undefined || existingValue === '');
+    const hasNewValue = (newValue !== null && newValue !== undefined && newValue !== '');
+    
+    if (isExistingNull && hasNewValue) {
+        hasNewInfo = true;
+        fieldsWithNewInfo.push(field);
+    }
+}
+```
+
+**Update criteria**:
+- ✅ **Only factual data** from metadata sources
+- ✅ **No inferring or guessing** of values
+- ✅ **Null field population** with actual metadata
+- ✅ **Simple null checking** - no complex status management
+
+##### **For New Models**:
+- **Complete database record** creation with all available metadata
+- **Server availability tracking** update
+- **Model type classification** (checkpoint/lora)
+
+### 📊 Statistics & Reporting
+
+**Tracks comprehensive metrics**:
+```javascript
+stats = {
+    total: allModels.length,           // Total files discovered
+    added: 0,                          // New models added
+    updated: 0,                        // Existing models updated
+    skipped: 0,                        // No new information
+    errors: 0,                         // Processing failures
+    checkpoints: 0,                    // Checkpoint models found
+    loras: 0,                          // LoRA models found
+    hashesCalculated: 0,               // Hashes computed
+    hashesSkipped: 0,                  // Files too large for hashing
+    hashErrors: 0                      // Hash calculation failures
+};
+```
+
+**Example success message**:
+```
+Scan complete! Found 847 models (623 checkpoints, 224 LoRAs)
+- Added: 12 new models
+- Updated: 45 models with new metadata
+- Calculated: 8 hashes
+```
+
+### 🔧 Configuration Requirements
+
+#### **Environment Variables**
+- `MODEL_PATH`: Single root directory to scan recursively
+- `CONFIG_DATA_PATH`: Database storage location
+
+#### **File System Requirements**
+- **Read access**: Model directories and files
+- **Write access**: Database updates and preview downloads
+- **Directory structure**: Any organization supported (recursive scanning)
+
+#### **Optional Integrations**
+- `CIVITAI_API_KEY`: For future metadata enrichment features
+- Preview image storage: For gallery display
+
+### 🐛 Troubleshooting & Debugging
+
+**Common scan results**:
+- **"Models skipped"**: Existing models with no new metadata to add
+- **"Hash calculation skipped"**: Files exceeding size limits (>15GB default)
+- **"Metadata errors"**: Corrupted or invalid JSON/safetensors files
+- **"No models found"**: Check `MODEL_PATH` configuration and permissions
+
+**Enhanced debugging** (current implementation includes comprehensive logging):
+```
+[ModelScan] ======= COMPREHENSIVE DEBUG FOR model.safetensors =======
+[ModelScan] EXISTING MODEL KEY FIELDS:
+  type: "lora"
+  hash_autov2: "abc123def4"
+  metadata_source: "embedded"
+[ModelScan] NEW MODEL DATA KEY FIELDS:
+  type: "lora"
+  hash_autov2: "abc123def4"
+  metadata_source: "civitai"
+[ModelScan] FIELD-BY-FIELD COMPARISON:
+  civitai_trained_words: existing="null" → new="anime, portrait" (hasNew=true)
+[ModelScan] ✓ Updated model: model.safetensors (1 fields updated)
+```
+
+This comprehensive scanning process ensures that StableQueue maintains an accurate, up-to-date inventory of all available AI models with rich metadata for optimal job matching and availability tracking. 

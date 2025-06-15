@@ -1546,6 +1546,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
             
+            // Add click event listener to show model details modal
+            card.addEventListener('click', (e) => {
+                // Don't trigger modal if clicking on action buttons
+                if (e.target.classList.contains('civitai-logo') || e.target.classList.contains('todo-list-icon')) {
+                    return;
+                }
+                showModelDetailsModal(model);
+            });
+            
             container.appendChild(card);
         });
         
@@ -1901,7 +1910,36 @@ document.addEventListener('DOMContentLoaded', () => {
             handleNsfwBlurToggle();
         }
 
+        // Check and display Civitai API status
+        checkCivitaiApiStatus();
+
         // No need for additional nav click handler - it's already handled in main nav setup
+    }
+
+    // Function to check Civitai API status and display username
+    async function checkCivitaiApiStatus() {
+        const statusElement = document.getElementById('civitai-api-status');
+        if (!statusElement) return;
+
+        try {
+            const response = await fetch('/api/v1/civitai/user-info');
+            const data = await response.json();
+
+            if (data.success && data.username) {
+                statusElement.textContent = `Civitai API key valid for ${data.username}`;
+                statusElement.style.display = 'inline';
+                statusElement.style.color = 'var(--accent-primary)';
+            } else {
+                statusElement.textContent = 'Civitai API key not configured';
+                statusElement.style.display = 'inline';
+                statusElement.style.color = 'var(--text-muted)';
+            }
+        } catch (error) {
+            console.warn('Failed to check Civitai API status:', error);
+            statusElement.textContent = 'Civitai API key not configured';
+            statusElement.style.display = 'inline';
+            statusElement.style.color = 'var(--text-muted)';
+        }
     }
 
     // Initialize models tab (this will be called from the main initialization)
@@ -2103,5 +2141,176 @@ document.addEventListener('DOMContentLoaded', () => {
                 card.classList.remove('nsfw-blurred');
             }
         });
+    }
+
+    // Function to show model details modal
+    function showModelDetailsModal(model) {
+        const modal = document.getElementById('model-details-modal');
+        const title = document.getElementById('model-details-title');
+        const img = document.getElementById('model-details-img');
+        const placeholder = document.getElementById('model-details-placeholder');
+        const fieldsContainer = document.getElementById('model-details-fields');
+        
+        if (!modal || !title || !img || !placeholder || !fieldsContainer) {
+            console.error('Modal elements not found');
+            return;
+        }
+        
+        // Set the model name
+        title.textContent = model.name || model.filename || 'Unknown Model';
+        
+        // Handle preview image
+        const previewUrl = getModelPreviewUrl(model);
+        if (previewUrl) {
+            img.src = previewUrl;
+            img.style.display = 'block';
+            placeholder.style.display = 'none';
+        } else {
+            img.style.display = 'none';
+            placeholder.style.display = 'flex';
+        }
+        
+        // Populate model fields
+        populateModelFields(model, fieldsContainer);
+        
+        // Show the modal
+        modal.style.display = 'block';
+        
+        // Add escape key listener
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                hideModelDetailsModal();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+    
+    // Function to hide model details modal
+    function hideModelDetailsModal() {
+        const modal = document.getElementById('model-details-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
+    }
+    
+    // Function to populate model fields in the modal
+    function populateModelFields(model, container) {
+        // Define all possible database fields with friendly names
+        const fieldDefinitions = [
+            { key: 'id', label: 'Database ID', type: 'number' },
+            { key: 'filename', label: 'Filename', type: 'text' },
+            { key: 'type', label: 'Model Type', type: 'text' },
+            { key: 'local_path', label: 'Local Path', type: 'text' },
+            { key: 'hash_autov2', label: 'AutoV2 Hash', type: 'hash' },
+            { key: 'hash_sha256', label: 'SHA256 Hash', type: 'hash' },
+            { key: 'civitai_id', label: 'Civitai Model ID', type: 'text' },
+            { key: 'civitai_version_id', label: 'Civitai Version ID', type: 'text' },
+            { key: 'civitai_model_name', label: 'Civitai Model Name', type: 'text' },
+            { key: 'civitai_model_base', label: 'Base Model', type: 'text' },
+            { key: 'civitai_model_type', label: 'Civitai Type', type: 'text' },
+            { key: 'civitai_model_version_name', label: 'Version Name', type: 'text' },
+            { key: 'civitai_model_version_desc', label: 'Version Description', type: 'text' },
+            { key: 'civitai_model_version_date', label: 'Version Date', type: 'date' },
+            { key: 'civitai_download_url', label: 'Download URL', type: 'url' },
+            { key: 'civitai_trained_words', label: 'Trigger Words', type: 'text' },
+            { key: 'civitai_file_size_kb', label: 'File Size (KB)', type: 'number' },
+            { key: 'civitai_nsfw', label: 'NSFW Content', type: 'boolean' },
+            { key: 'civitai_blurhash', label: 'Blur Hash', type: 'text' },
+            { key: 'metadata_status', label: 'Metadata Status', type: 'text' },
+            { key: 'metadata_source', label: 'Metadata Source', type: 'text' },
+            { key: 'has_embedded_metadata', label: 'Has Embedded Metadata', type: 'boolean' },
+            { key: 'last_used', label: 'Last Used', type: 'date' },
+            { key: 'created_at', label: 'Created At', type: 'date' }
+        ];
+        
+        // Clear existing fields
+        container.innerHTML = '';
+        
+        // Create fields for each defined field
+        fieldDefinitions.forEach(field => {
+            const fieldDiv = document.createElement('div');
+            fieldDiv.className = 'model-field';
+            
+            const labelDiv = document.createElement('div');
+            labelDiv.className = 'model-field-label';
+            labelDiv.textContent = field.label;
+            
+            const valueDiv = document.createElement('div');
+            valueDiv.className = 'model-field-value';
+            
+            const value = model[field.key];
+            
+            if (value === null || value === undefined || value === '') {
+                valueDiv.textContent = 'Not set';
+                valueDiv.classList.add('null-value');
+            } else {
+                switch (field.type) {
+                    case 'hash':
+                        valueDiv.textContent = value;
+                        valueDiv.classList.add('hash-value');
+                        break;
+                    case 'url':
+                        valueDiv.textContent = value;
+                        valueDiv.classList.add('url-value');
+                        valueDiv.addEventListener('click', () => window.open(value, '_blank'));
+                        break;
+                    case 'boolean':
+                        valueDiv.textContent = value ? 'Yes' : 'No';
+                        break;
+                    case 'date':
+                        if (value) {
+                            try {
+                                const date = new Date(value);
+                                valueDiv.textContent = date.toLocaleString();
+                            } catch (e) {
+                                valueDiv.textContent = value;
+                            }
+                        } else {
+                            valueDiv.textContent = 'Not set';
+                            valueDiv.classList.add('null-value');
+                        }
+                        break;
+                    case 'number':
+                        valueDiv.textContent = Number(value).toLocaleString();
+                        break;
+                    default:
+                        valueDiv.textContent = value;
+                }
+            }
+            
+            fieldDiv.appendChild(labelDiv);
+            fieldDiv.appendChild(valueDiv);
+            container.appendChild(fieldDiv);
+        });
+    }
+    
+    // Add event listeners for modal close functionality
+    const modelModal = document.getElementById('model-details-modal');
+    if (modelModal) {
+        // Close modal when clicking the X button
+        const closeBtn = modelModal.querySelector('.close-modal');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', hideModelDetailsModal);
+        }
+        
+        // Close modal when clicking outside of it
+        modelModal.addEventListener('click', (e) => {
+            if (e.target === modelModal) {
+                hideModelDetailsModal();
+            }
+        });
+        
+        // OK and Cancel buttons both close the modal for now
+        const okBtn = document.getElementById('model-details-ok-btn');
+        const cancelBtn = document.getElementById('model-details-cancel-btn');
+        
+        if (okBtn) {
+            okBtn.addEventListener('click', hideModelDetailsModal);
+        }
+        
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', hideModelDetailsModal);
+        }
     }
 });

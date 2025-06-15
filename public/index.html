@@ -291,36 +291,41 @@
                         Calculate hashes during scan (AutoV2, up to 15GB files, ~7.5min for large files)
                     </label>
                 </div>
-                <div class="filter-group">
-                    <label for="model-type-filter">Type:</label>
-                    <select id="model-type-filter">
-                        <option value="all">All</option>
-                        <option value="checkpoint">Checkpoint</option>
-                        <option value="lora">LoRA</option>
-                    </select>
+                <div class="filter-row">
+                    <div class="filter-group-left">
+                        <label for="model-type-filter">Type:</label>
+                        <select id="model-type-filter">
+                            <option value="all">All</option>
+                            <option value="checkpoint">Checkpoint</option>
+                            <option value="lora">LoRA</option>
+                        </select>
+                        
+                        <label for="model-base-filter">Base Model:</label>
+                        <select id="model-base-filter">
+                            <option value="all">All</option>
+                        </select>
+                        
+                        <label for="model-availability-filter">Availability:</label>
+                        <select id="model-availability-filter">
+                            <option value="all">All</option>
+                            <option value="available">Available</option>
+                            <option value="unavailable">Unavailable</option>
+                        </select>
+                        
+                        <label for="model-metadata-filter">Metadata:</label>
+                        <select id="model-metadata-filter">
+                            <option value="all">All</option>
+                            <option value="complete">Complete</option>
+                            <option value="incomplete">Incomplete</option>
+                        </select>
+                    </div>
                     
-                    <label for="model-base-filter">Base Model:</label>
-                    <select id="model-base-filter">
-                        <option value="all">All</option>
-                    </select>
-                    
-                    <label for="model-availability-filter">Availability:</label>
-                    <select id="model-availability-filter">
-                        <option value="all">All</option>
-                        <option value="available">Available</option>
-                        <option value="unavailable">Unavailable</option>
-                    </select>
-                    
-                    <label for="model-metadata-filter">Metadata:</label>
-                    <select id="model-metadata-filter">
-                        <option value="all">All</option>
-                        <option value="complete">Complete</option>
-                        <option value="incomplete">Incomplete</option>
-                    </select>
-                    
-                    <label for="blur-nsfw-checkbox" class="blur-nsfw-label">
-                        <input type="checkbox" id="blur-nsfw-checkbox" checked> Blur NSFW
-                    </label>
+                    <div class="filter-group-right">
+                        <span id="civitai-api-status" class="civitai-api-status" style="display: none;"></span>
+                        <label for="blur-nsfw-checkbox" class="blur-nsfw-label">
+                            <input type="checkbox" id="blur-nsfw-checkbox" checked> Blur NSFW
+                        </label>
+                    </div>
                 </div>
             </div>
             <div id="models-list" class="models-list-grid"></div>
@@ -375,6 +380,34 @@
                 <div class="form-buttons">
                     <button id="confirm-reset-db-btn" class="danger-button">Yes, Reset Database</button>
                     <button id="cancel-reset-db-btn" class="secondary-button">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model Details Modal -->
+    <div id="model-details-modal" class="modal" style="display: none;">
+        <div class="modal-content model-details-content">
+            <span class="close-modal">&times;</span>
+            <div class="modal-body model-details-body">
+                <div class="model-details-layout">
+                    <div class="model-details-image">
+                        <img id="model-details-img" src="" alt="Model Preview">
+                        <div id="model-details-placeholder" class="model-details-placeholder" style="display: none;">
+                            <span class="placeholder-icon">🖼️</span>
+                            <span class="placeholder-text">No Preview Image</span>
+                        </div>
+                    </div>
+                    <div class="model-details-info">
+                        <h2 id="model-details-title">Model Name</h2>
+                        <div class="model-details-fields" id="model-details-fields">
+                            <!-- Model fields will be populated here -->
+                        </div>
+                        <div class="model-details-buttons">
+                            <button id="model-details-ok-btn" class="primary-button">OK</button>
+                            <button id="model-details-cancel-btn" class="secondary-button">Cancel</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

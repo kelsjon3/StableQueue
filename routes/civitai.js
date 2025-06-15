@@ -41,6 +41,38 @@ function checkApiKey() {
 // Log API key status at startup
 console.log(`Civitai API integration ${CIVITAI_API_KEY ? 'is using an API key' : 'is running WITHOUT an API key (limited functionality)'}`);
 
+// GET /api/v1/civitai/user-info - Get current user info (requires API key)
+router.get('/civitai/user-info', async (req, res) => {
+  if (!CIVITAI_API_KEY) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Civitai API key is not configured' 
+    });
+  }
+
+  try {
+    const response = await axios.get(`${CIVITAI_API_BASE}/me`, {
+      headers: getCivitaiHeaders()
+    });
+    
+    const userData = response.data;
+    res.json({ 
+      success: true, 
+      username: userData.username,
+      id: userData.id,
+      email: userData.email
+    });
+  } catch (error) {
+    console.error('Error fetching Civitai user info:', error);
+    const statusCode = error.response?.status || 500;
+    const message = error.response?.data?.error || error.message || 'Failed to fetch user info';
+    res.status(statusCode).json({ 
+      success: false, 
+      message: message 
+    });
+  }
+});
+
 // POST /api/v1/civitai/image-info - Get generation parameters and model info from a Civitai image ID
 router.post('/civitai/image-info', async (req, res) => {
   const { civitaiImageId } = req.body;
