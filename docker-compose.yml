@@ -8,13 +8,14 @@ services:
       - "8083:3000"
     volumes:
       - ./data:/usr/src/app/data
-      - ./models/Stable-diffusion:/app/models/Stable-diffusion
-      - ./models/Lora:/app/models/Lora
-      - ./outputs:/app/outputs
+      - /mnt/user/Stable_Diffusion_Data/models:/app/models
+      - /mnt/user/Stable_Diffusion_Data/outputs:/app/outputs
     environment:
       - PORT=3000
       - CONFIG_DATA_PATH=/usr/src/app/data
       - STABLE_DIFFUSION_SAVE_PATH=/app/outputs
+      - MODEL_PATH=/app/models
+      - MODELS_PATH=/app/models
       - LORA_PATH=/app/models/Lora
       - CHECKPOINT_PATH=/app/models/Stable-diffusion
       - NODE_ENV=development

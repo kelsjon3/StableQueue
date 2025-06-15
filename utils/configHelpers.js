@@ -104,27 +104,44 @@ const scanModelDirectory = async (directoryPath, fileExtensions, rootModelPath) 
           relativePath: path.relative(rootModelPath, directoryPath)
         };
 
-        // Try to find and read an associated .civitai.json file
+        // Try to find and read associated metadata files
         const baseName = dirent.name.substring(0, dirent.name.lastIndexOf('.'));
-        const jsonPath = path.join(directoryPath, `${baseName}.civitai.json`);
-        const previewImagePath = path.join(directoryPath, `${baseName}.preview.png`); // Common preview naming
+        
+        // Check for preview image - only look for the consistent naming pattern
+        const previewPath = path.join(directoryPath, `${baseName}.preview.jpeg`);
 
+        // First try Forge-style JSON (modelname.json)
+        const forgeJsonPath = path.join(directoryPath, `${baseName}.json`);
         try {
-          const jsonData = await fs.readFile(jsonPath, 'utf-8');
+          const jsonData = await fs.readFile(forgeJsonPath, 'utf-8');
           const parsedJson = JSON.parse(jsonData);
+          // Only merge if it contains actual model metadata
+          if (parsedJson.modelId || parsedJson.model?.id || parsedJson.name || parsedJson.description) {
           modelInfo = { ...modelInfo, ...parsedJson }; // Merge JSON data
+            modelInfo._metadata_source = 'forge';
+          }
         } catch (jsonError) {
-          // .civitai.json not found or unreadable, proceed without it
-          // console.debug(`No .civitai.json for ${dirent.name} or error reading: ${jsonError.message}`);
+          // Forge JSON not found, try Civitai format
+          const civitaiJsonPath = path.join(directoryPath, `${baseName}.civitai.json`);
+          try {
+            const jsonData = await fs.readFile(civitaiJsonPath, 'utf-8');
+            const parsedJson = JSON.parse(jsonData);
+            modelInfo = { ...modelInfo, ...parsedJson }; // Merge JSON data
+            modelInfo._metadata_source = 'civitai';
+          } catch (civitaiError) {
+            // No JSON metadata found, will rely on embedded metadata during scan
+            modelInfo._metadata_source = 'none';
+          }
         }
         
-        // Check for preview image (optional, just add its existence or path if needed by UI)
+        // Check if the consistent preview file exists
         try {
-          await fs.access(previewImagePath); // Check if preview exists
+          await fs.access(previewPath);
           modelInfo.previewAvailable = true;
-          // Optionally, modelInfo.previewPath = relative path to preview for direct serving if ever needed
-        } catch (previewError) {
+          modelInfo.previewPath = previewPath; // Store full path for database
+        } catch (err) {
           modelInfo.previewAvailable = false;
+          modelInfo.previewPath = null;
         }
 
         models.push(modelInfo);

@@ -27,6 +27,9 @@ const CIVITAI_RATE_LIMIT = {
  * @returns {Promise} - Axios response
  */
 async function rateLimitedCivitaiRequest(url, options = {}) {
+    // Log all Civitai API calls to help debug rate limiting issues
+    console.log(`[Civitai API CALL] ${url} - Called from: ${new Error().stack.split('\n')[2].trim()}`);
+    
     const now = Date.now();
     const timeSinceLastRequest = now - CIVITAI_RATE_LIMIT.lastRequestTime;
     
@@ -59,15 +62,26 @@ async function rateLimitedCivitaiRequest(url, options = {}) {
 
 /**
  * GET /api/v1/models
- * Returns a combined list of checkpoints and LoRAs with metadata
+ * Returns a combined list of checkpoints and LoRAs with metadata FROM DATABASE ONLY
+ * NO CIVITAI API CALLS ARE MADE FROM THIS ENDPOINT
  */
 router.get('/models', async (req, res) => {
     try {
+        console.log('[Models] GET /models - fetching from database only, NO Civitai calls');
         const models = modelDB.getAllModels();
+        
+        // Return models as-is from database with preview_path field
+        const modelsWithPreviewUrls = models.map(model => {
+            return {
+                ...model,
+                has_preview: !!model.preview_path // True if preview_path exists, false if null
+            };
+        });
+        
         res.json({
             success: true,
-            count: models.length,
-            models
+            count: modelsWithPreviewUrls.length,
+            models: modelsWithPreviewUrls
         });
     } catch (error) {
         console.error('Error retrieving models:', error);
@@ -86,68 +100,45 @@ router.get('/models', async (req, res) => {
 router.get('/models/:id/preview', async (req, res) => {
     try {
         const modelId = req.params.id;
-        const type = req.query.type || 'checkpoint'; // Default to checkpoint if not specified
+        const type = req.query.type || 'checkpoint';
         
-        // Route currently expects ID in format: relativePath/filename (without extension)
-        // This could be enhanced to use database IDs in the future
-        const modelPath = modelId;
-        const basePath = type === 'checkpoint' ? process.env.CHECKPOINT_PATH : process.env.LORA_PATH;
+        console.log(`[Preview Debug] Request for model: ${modelId}, type: ${type}`);
         
-        if (!basePath) {
-            return res.status(500).json({ 
-                success: false, 
-                message: `${type.toUpperCase()}_PATH not configured` 
+        // Look up model in database to get the preview_path
+        const allModels = modelDB.getAllModels();
+        const model = allModels.find(m => m.filename === modelId);
+        
+        if (!model) {
+            console.log(`[Preview Debug] Model not found in database: ${modelId}`);
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found in database'
             });
         }
         
-        // The preview image is assumed to be {filename}.preview.png in the same directory
-        // This matches Forge's convention
-        const parts = modelPath.split('/');
-        const filename = parts.pop(); // Get just the filename
-        const directory = parts.join('/'); // Recombine the directory path
-        
-        const fullDirectory = path.join(basePath, directory);
-        const modelBasename = filename.substring(0, filename.lastIndexOf('.'));
-        
-        // Try different common preview naming conventions, prioritizing JPG files
-        const previewOptions = [
-            // First check for JPG and other common formats
-            path.join(fullDirectory, `${modelBasename}.jpg`),
-            path.join(fullDirectory, `${modelBasename}.jpeg`),
-            path.join(fullDirectory, `${modelBasename}.png`),
-            // Then check Forge-style preview files
-            path.join(fullDirectory, `${modelBasename}.preview.png`),
-            // Check other image formats
-            path.join(fullDirectory, `${modelBasename}.webp`),
-            path.join(fullDirectory, `${modelBasename}.gif`),
-            path.join(fullDirectory, `${modelBasename}.preview.jpg`),
-            path.join(fullDirectory, `${modelBasename}.preview.jpeg`),
-            path.join(fullDirectory, `${modelBasename}.preview.webp`)
-        ];
-        
-        // Try to find any existing preview image
-        let previewPath = null;
-        for (const option of previewOptions) {
-            try {
-                await fs.access(option);
-                previewPath = option;
-                console.log(`[Models] Found preview image: ${option}`);
-                break;
-            } catch (err) {
-                // File doesn't exist or isn't accessible, try next option
-            }
-        }
-        
-        if (!previewPath) {
-            // If no preview found, return a default placeholder
+        // Use the stored preview_path from database
+        if (!model.preview_path) {
+            console.log(`[Preview Debug] No preview_path stored for model: ${modelId}`);
             return res.status(404).json({
                 success: false,
                 message: 'No preview image found for this model'
             });
         }
         
-        // Send the preview image
-        res.sendFile(previewPath);
+        console.log(`[Preview Debug] Using stored preview_path: ${model.preview_path}`);
+        
+        // Check if the preview file exists
+        try {
+            await fs.access(model.preview_path);
+            console.log(`[Preview Debug] Serving preview: ${model.preview_path}`);
+            res.sendFile(model.preview_path);
+        } catch (err) {
+            console.log(`[Preview Debug] Preview file not found at stored path: ${model.preview_path}`);
+            return res.status(404).json({
+                success: false,
+                message: 'Preview image file not found'
+            });
+        }
         
     } catch (error) {
         console.error('Error serving model preview:', error);
@@ -232,7 +223,10 @@ router.get('/models/:id/info', async (req, res) => {
         
         // Try to find preview image
         const previewOptions = [
+            path.join(fullDirectory, `${modelBasename}.preview.jpeg`),
+            path.join(fullDirectory, `${modelBasename}.preview.jpg`),
             path.join(fullDirectory, `${modelBasename}.preview.png`),
+            path.join(fullDirectory, `${modelBasename}.preview.webp`),
             path.join(fullDirectory, `${modelBasename}.png`),
             path.join(fullDirectory, `${modelBasename}.jpg`),
             path.join(fullDirectory, `${modelBasename}.jpeg`),
@@ -658,10 +652,10 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
             hash_autov2: hash_autov2,
             hash_sha256: hash_sha256,
             civitai_model_name: metadata.name || null,
-            civitai_model_base: metadata.baseModel || null,
-            civitai_model_type: metadata.type || null,
+            civitai_model_base: metadata.baseModel || metadata.model?.baseModel || metadata['sd version'] || null,
+            civitai_model_type: metadata.type || metadata.model?.type || null,
             civitai_model_version_name: metadata.name || null,
-            civitai_model_version_desc: metadata.description || null,
+            civitai_model_version_desc: metadata.description || metadata.model?.description,
             civitai_model_version_date: metadata.updated_at || metadata.createdAt || null,
             civitai_download_url: metadata.downloadUrl || null,
             civitai_trained_words: trained_words,
@@ -833,6 +827,8 @@ router.post('/models/scan', async (req, res) => {
                     type: null, // Will be set later from metadata or remain null
                     local_path: modelDir,
                     filename: model.filename,
+                    preview_path: model.previewPath || null,
+                    preview_url: model.previewPath ? `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint` : null,
                     metadata_status: metadataStatus,
                     metadata_source: metadata?._json_source || (metadata?._has_embedded ? 'embedded' : 'none'),
                     has_embedded_metadata: metadata?._has_embedded || false

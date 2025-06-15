@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const { checkModelAvailability, extractCivitaiVersionId } = require('../utils/modelDatabase');
+const { checkModelAvailability, extractModelHash } = require('../utils/modelDatabase');
 const jobQueue = require('../utils/jobQueueHelpers');
 const { readServersConfig } = require('../utils/configHelpers');
 const rateLimit = require('express-rate-limit');
@@ -325,30 +325,32 @@ router.get('/jobs/:jobId/status', apiAuthWithJobRateLimit, (req, res) => {
             });
         }
 
-        // Add model availability information using simplified Civitai version ID matching
+        // Add model availability information using hash-based matching
         let model_availability = {
             available: null,
-            reason: 'No Civitai version ID found'
+            reason: 'No model hash found'
         };
         
-        const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+        const { hash, source } = extractModelHash(job.generation_params);
         
-        if (civitaiVersionId) {
-            const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
+        if (hash) {
+            const availability = checkModelAvailability(hash, 'checkpoint');
             model_availability = {
                 available: availability.available,
                 reason: availability.reason || null,
                 civitai_model_id: availability.civitai_model_id || null,
-                civitai_version_id: availability.civitai_version_id || null,
+                hash: availability.hash || hash,
+                match_type: availability.match_type || null,
                 checked_field: source,
-                model_identifier: civitaiVersionId
+                model_identifier: hash
             };
         } else {
             model_availability = {
                 available: false,
                 reason: source,
                 civitai_model_id: null,
-                civitai_version_id: null,
+                hash: null,
+                match_type: null,
                 checked_field: 'N/A',
                 model_identifier: null
             };
@@ -420,28 +422,30 @@ router.get('/jobs', apiAuthWithJobRateLimit, (req, res) => {
         // Get jobs with enhanced filtering
         const jobs = jobQueue.getAllJobs(options);
         
-        // Enhance jobs with model availability information using simplified Civitai version ID matching
+        // Enhance jobs with model availability information using hash-based matching
         const enhancedJobs = jobs.map(job => {
             const enhancedJob = { ...job };
             
-            const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+            const { hash, source } = extractModelHash(job.generation_params);
             
-            if (civitaiVersionId) {
-                const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
+            if (hash) {
+                const availability = checkModelAvailability(hash, 'checkpoint');
                 enhancedJob.model_availability = {
                     available: availability.available,
                     reason: availability.reason || null,
                     civitai_model_id: availability.civitai_model_id || null,
-                    civitai_version_id: availability.civitai_version_id || null,
+                    hash: availability.hash || hash,
+                    match_type: availability.match_type || null,
                     checked_field: source,
-                    model_identifier: civitaiVersionId
+                    model_identifier: hash
                 };
             } else {
                 enhancedJob.model_availability = {
                     available: false,
                     reason: source,
                     civitai_model_id: null,
-                    civitai_version_id: null,
+                    hash: null,
+                    match_type: null,
                     checked_field: 'N/A',
                     model_identifier: null
                 };

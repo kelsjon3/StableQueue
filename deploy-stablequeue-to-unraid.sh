@@ -24,11 +24,10 @@ UNRAID_CONFIG_DATA_PATH="${UNRAID_APP_DIR}/data" # For StableQueue's own config 
 
 # !!! CRITICAL: REVIEW AND SET THESE PATHS MANUALLY AFTER THIS EDIT !!!
 # Point these to your actual master model library and desired saves location on Unraid.
-# Assumes a base data path is set. Using Forge-like structure.
+# Assumes a base data path is set. Using consolidated model structure.
 UNRAID_DATA_PATH="/mnt/user/Stable_Diffusion_Data" # Your master data location
-UNRAID_SAVES_PATH="${UNRAID_DATA_PATH}/outputs/StableQueue"       # Subfolder within outputs for clarity
-UNRAID_LORAS_PATH="${UNRAID_DATA_PATH}/models/Lora"           # Path to master LoRAs
-UNRAID_CHECKPOINTS_PATH="${UNRAID_DATA_PATH}/models/Stable-diffusion" # Path to master Checkpoints
+UNRAID_SAVES_PATH="${UNRAID_DATA_PATH}/outputs"       # Outputs location
+UNRAID_MODELS_PATH="${UNRAID_DATA_PATH}/models"           # Path to consolidated models directory
 
 UNRAID_HOST_PORT="8083" # The port you want to access StableQueue on Unraid
 # --- End Configuration ---
@@ -132,15 +131,16 @@ services:
       - "${UNRAID_HOST_PORT}:3000"
     volumes:
       - ${UNRAID_CONFIG_DATA_PATH}:/usr/src/app/data
-      # Updated volume paths for Unraid deployment
+      # Updated volume paths for consolidated model structure
       - ${UNRAID_SAVES_PATH}:/app/outputs
-      - ${UNRAID_LORAS_PATH}:/app/models/Lora
-      - ${UNRAID_CHECKPOINTS_PATH}:/app/models/Stable-diffusion
+      - ${UNRAID_MODELS_PATH}:/app/models
     environment:
       - PORT=3000
       - CONFIG_DATA_PATH=/usr/src/app/data
       # Updated environment variables for container paths
       - STABLE_DIFFUSION_SAVE_PATH=/app/outputs
+      - MODEL_PATH=/app/models
+      - MODELS_PATH=/app/models
       - LORA_PATH=/app/models/Lora
       - CHECKPOINT_PATH=/app/models/Stable-diffusion
       - NODE_ENV=production

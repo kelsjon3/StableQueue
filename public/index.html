@@ -59,7 +59,7 @@
                             <th>LoRAs</th>
                             <th>Server</th>
                             <th>Created</th>
-                            <th>Civitai Version ID</th>
+                            <th>Model Hash</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -270,41 +270,83 @@
         </section>
 
         <section id="models-view" class="tab-pane" style="display: none;">
-            <div class="models-controls">
-                <div class="button-group">
-                    <button id="refresh-models-btn">Refresh Display</button>
-                    <button id="scan-models-btn">Scan for New Models</button>
-                    <button id="reset-models-db-btn" class="danger-button">Reset Database</button>
-                </div>
-                <div class="filter-group">
-                    <label for="model-type-filter">Type:</label>
-                    <select id="model-type-filter">
-                        <option value="all">All</option>
-                        <option value="checkpoint">Checkpoint</option>
-                        <option value="lora">LoRA</option>
-                    </select>
-                    
-                    <label for="model-base-filter">Base Model:</label>
-                    <select id="model-base-filter">
-                        <option value="all">All</option>
-                    </select>
-                    
-                    <label for="model-availability-filter">Availability:</label>
-                    <select id="model-availability-filter">
-                        <option value="all">All</option>
-                        <option value="available">Available</option>
-                        <option value="unavailable">Unavailable</option>
-                    </select>
-                    
-                    <label for="model-metadata-filter">Metadata:</label>
-                    <select id="model-metadata-filter">
-                        <option value="all">All</option>
-                        <option value="complete">Complete</option>
-                        <option value="incomplete">Incomplete</option>
-                    </select>
-                </div>
+            <!-- Models Sub-Navigation -->
+            <div class="models-nav-tabs">
+                <button id="models-nav-all" class="models-nav-button active">All Models</button>
+                <button id="models-nav-servers" class="models-nav-button">By Server</button>
+                <button id="models-nav-availability" class="models-nav-button">Availability Overview</button>
             </div>
-            <div id="models-list" class="models-list-grid"></div>
+
+            <!-- All Models View -->
+            <div id="models-all-view" class="models-sub-view active">
+                <div class="models-controls">
+                    <div class="button-group">
+                        <button id="refresh-models-btn">Refresh Display</button>
+                        <button id="scan-models-btn">Scan for New Models</button>
+                        <button id="reset-models-db-btn" class="danger-button">Reset Database</button>
+                    </div>
+                    <div class="scan-options">
+                        <label>
+                            <input type="checkbox" id="calculate-hashes-checkbox">
+                            Calculate hashes during scan (AutoV2, up to 15GB files, ~7.5min for large files)
+                        </label>
+                    </div>
+                    <div class="filter-group">
+                        <label for="model-type-filter">Type:</label>
+                        <select id="model-type-filter">
+                            <option value="all">All</option>
+                            <option value="checkpoint">Checkpoint</option>
+                            <option value="lora">LoRA</option>
+                        </select>
+                        
+                        <label for="model-base-filter">Base Model:</label>
+                        <select id="model-base-filter">
+                            <option value="all">All</option>
+                        </select>
+                        
+                        <label for="model-availability-filter">Availability:</label>
+                        <select id="model-availability-filter">
+                            <option value="all">All</option>
+                            <option value="available">Available</option>
+                            <option value="unavailable">Unavailable</option>
+                        </select>
+                        
+                        <label for="model-metadata-filter">Metadata:</label>
+                        <select id="model-metadata-filter">
+                            <option value="all">All</option>
+                            <option value="complete">Complete</option>
+                            <option value="incomplete">Incomplete</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="models-list" class="models-list-grid"></div>
+            </div>
+
+            <!-- By Server View -->
+            <div id="models-servers-view" class="models-sub-view" style="display: none;">
+                <div class="models-controls">
+                    <div class="button-group">
+                        <button id="refresh-server-models-btn">Refresh Server Data</button>
+                    </div>
+                    <div class="filter-group">
+                        <label for="server-select">Server:</label>
+                        <select id="server-select">
+                            <option value="all">All Servers</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="server-models-list" class="server-models-container"></div>
+            </div>
+
+            <!-- Availability Overview View -->
+            <div id="models-availability-view" class="models-sub-view" style="display: none;">
+                <div class="models-controls">
+                    <div class="button-group">
+                        <button id="refresh-availability-btn">Refresh Availability</button>
+                    </div>
+                </div>
+                <div id="availability-overview" class="availability-overview-container"></div>
+            </div>
         </section>
 
         </main>

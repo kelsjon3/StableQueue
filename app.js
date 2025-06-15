@@ -54,8 +54,15 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Serve generated images from the outputs directory
 app.use('/outputs', express.static(STABLE_DIFFUSION_SAVE_PATH));
 
-// Apply global rate limiting to all API routes
-app.use('/api', globalRateLimiter);
+// Apply global rate limiting to all API routes EXCEPT preview images
+app.use('/api', (req, res, next) => {
+    // Skip rate limiting for preview image endpoints
+    if (req.path.includes('/preview')) {
+        return next();
+    }
+    // Apply rate limiting for all other API endpoints
+    return globalRateLimiter(req, res, next);
+});
 
 // API routes
 app.use('/api/v1/servers', serversRouter);
@@ -139,8 +146,16 @@ server.listen(PORT, async () => {
   console.log(`StableQueue server listening on port ${PORT}`);
   console.log(`Serving static files from: ${path.join(__dirname, 'public')}`);
   console.log(`Using config directory: ${process.env.CONFIG_DATA_PATH || path.join(__dirname, 'data')}`);
+  
+  // Show new consolidated model path if available
+  if (process.env.MODEL_PATH) {
+    console.log(`Using Model path: ${process.env.MODEL_PATH}`);
+  } else {
+    // Fall back to showing legacy paths for backward compatibility
   console.log(`Using LoRA path: ${process.env.LORA_PATH || 'Not Set'}`);
   console.log(`Using Checkpoint path: ${process.env.CHECKPOINT_PATH || 'Not Set'}`);
+  }
+  
   console.log(`Using Save path: ${process.env.STABLE_DIFFUSION_SAVE_PATH || 'Not Set'}`);
   
   await startServices();

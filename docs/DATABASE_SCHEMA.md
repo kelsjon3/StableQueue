@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS models (
     type TEXT CHECK (type IN ('checkpoint', 'lora') OR type IS NULL),
     local_path TEXT NOT NULL,
     filename TEXT NOT NULL,
+    preview_path TEXT,
+    preview_url TEXT,
     civitai_id TEXT,
     civitai_version_id TEXT,
     forge_format TEXT,
@@ -110,7 +112,9 @@ CREATE TABLE IF NOT EXISTS models (
     civitai_download_url TEXT,
     civitai_trained_words TEXT,
     civitai_file_size_kb INTEGER,
-    metadata_status TEXT NOT NULL DEFAULT 'incomplete' CHECK (metadata_status IN ('complete', 'incomplete', 'error')),
+    metadata_status TEXT NOT NULL DEFAULT 'incomplete' CHECK (metadata_status IN ('complete', 'partial', 'incomplete', 'none', 'error')),
+    metadata_source TEXT DEFAULT 'none' CHECK (metadata_source IN ('forge', 'civitai', 'embedded', 'none')),
+    has_embedded_metadata BOOLEAN DEFAULT FALSE,
     last_used TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -127,11 +131,13 @@ CREATE INDEX IF NOT EXISTS idx_models_hashes ON models (hash_autov2, hash_sha256
 - `type`: Model type (checkpoint, lora, or null if unknown)
 - `local_path`: Full file system path to model file
 - `filename`: Base filename of the model
+- `preview_path`: Full file system path to preview image file (e.g., `/app/models/checkpoints/model.preview.png`)
+- `preview_url`: Ready-to-use URL for preview image serving (e.g., `/api/models/preview/123`)
 - `civitai_id`: Civitai model ID for API integration
 - `civitai_version_id`: Civitai version ID for specific model version
 - `forge_format`: Forge-specific formatting information
-- `hash_autov2`: AutoV2 hash for model identification
-- `hash_sha256`: SHA256 hash for model verification
+- `hash_autov2`: AutoV2 hash for model identification (10-character lowercase hex)
+- `hash_sha256`: SHA256 hash for model verification (64-character hex)
 - `civitai_model_name`: Model name from Civitai
 - `civitai_model_base`: Base model type (SD 1.5, SDXL, etc.)
 - `civitai_model_type`: Civitai model category
@@ -139,17 +145,17 @@ CREATE INDEX IF NOT EXISTS idx_models_hashes ON models (hash_autov2, hash_sha256
 - `civitai_model_version_desc`: Version description from Civitai
 - `civitai_model_version_date`: Release date from Civitai
 - `civitai_download_url`: Direct download URL from Civitai
-- `civitai_trained_words`: Trigger words for the model
+- `civitai_trained_words`: Trigger words for the model (JSON array or comma-separated string)
 - `civitai_file_size_kb`: File size in kilobytes
-- `metadata_status`: Status of Civitai metadata enrichment
-- `metadata_source`: Source of metadata (forge/civitai/embedded/none)
-- `has_embedded_metadata`: Boolean flag for embedded metadata presence
+- `metadata_status`: Status of metadata enrichment (complete, partial, incomplete, none, error)
+- `metadata_source`: Source of metadata (forge, civitai, embedded, none)
+- `has_embedded_metadata`: Boolean flag for embedded metadata presence in safetensors files
 - `last_used`: Timestamp of last model usage
 - `created_at`: Timestamp of database record creation
 
 ### Model Parameters Example
 
-Here's an example of all 24 parameters stored for a LoRA model (`0859 library_v1_pony.safetensors`):
+Here's an example of all 26 parameters stored for a LoRA model (`0859 library_v1_pony.safetensors`):
 
 ```json
 {
@@ -158,22 +164,24 @@ Here's an example of all 24 parameters stored for a LoRA model (`0859 library_v1
   "type": "lora",
   "local_path": "/app/models/loras/Pony",
   "filename": "0859 library_v1_pony.safetensors",
+  "preview_path": "/app/models/loras/Pony/0859 library_v1_pony.preview.png",
+  "preview_url": "/api/models/preview/275",
   "civitai_id": "651553.0",
   "civitai_version_id": "728915.0",
   "forge_format": null,
-  "hash_autov2": null,
+  "hash_autov2": "4feaadf292",
   "hash_sha256": "4FEAADF2925367C7C8C67A43888BAB274C1306672EC82CED8FDD15F196135073",
-  "civitai_model_name": null,
-  "civitai_model_base": null,
-  "civitai_model_type": null,
-  "civitai_model_version_name": null,
-  "civitai_model_version_desc": null,
-  "civitai_model_version_date": null,
-  "civitai_download_url": null,
-  "civitai_trained_words": "ruanyi0859",
-  "civitai_file_size_kb": null,
+  "civitai_model_name": "Library Concept",
+  "civitai_model_base": "Pony",
+  "civitai_model_type": "LORA",
+  "civitai_model_version_name": "v1.0",
+  "civitai_model_version_desc": "A LoRA for generating library scenes",
+  "civitai_model_version_date": "2024-03-15T10:30:00Z",
+  "civitai_download_url": "https://civitai.com/api/download/models/728915",
+  "civitai_trained_words": "ruanyi0859, library, books, reading",
+  "civitai_file_size_kb": 144256,
   "metadata_status": "complete",
-  "metadata_source": "forge",
+  "metadata_source": "civitai",
   "has_embedded_metadata": 1,
   "last_used": "2025-06-14 02:56:15",
   "created_at": "2025-06-14 02:56:15"
@@ -202,6 +210,13 @@ The system merges data from these sources with JSON taking precedence over embed
 - JSON `trainedWords` or `activation text` fields (highest priority)
 - Rich tag frequency data from embedded `ss_tag_frequency` (fallback)
 - Combines multiple high-frequency tags intelligently when using embedded data
+
+**Preview Image System**: The preview fields support model thumbnails and preview images:
+- `preview_path`: Stores the full file system path to preview images (e.g., `model.preview.png`, `model.civitai.preview.jpg`)
+- `preview_url`: Provides a ready-to-use URL endpoint for serving preview images through the API
+- Preview images are automatically detected during model scanning from common naming patterns
+- Civitai integration can download and cache preview images from the Civitai API
+- The UI uses `preview_url` for displaying model cards with thumbnails
 
 ### `model_aliases` Table
 Alternative path mappings for model matching.
@@ -254,10 +269,15 @@ StableQueue includes an automated database migration system to handle schema upd
 
 ### Migration Features
 - **Automatic Backup**: Creates timestamped backups before migrations
-- **Column Detection**: Checks for existing columns before adding new ones
+- **Column Detection**: Checks for existing columns before adding new ones using `PRAGMA table_info()`
 - **Table Detection**: Verifies table existence before creation
 - **Transaction Safety**: Uses database transactions for atomic updates
 - **Rollback Support**: Automatic rollback on migration failures
+- **Schema Validation**: Validates column existence before attempting ALTER TABLE operations
+
+### Recent Migrations
+- **v2.1.0**: Added `preview_path` and `preview_url` columns to models table for preview image support
+- **v2.0.0**: Enhanced metadata_status enum to include 'partial', 'none' states and added `metadata_source`, `has_embedded_metadata` columns
 
 ### Running Migrations
 Migrations run automatically on application startup, but can also be run manually:

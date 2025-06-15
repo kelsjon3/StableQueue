@@ -233,12 +233,13 @@ For the complete list of available environment variables, see [`.env.example`](.
 ```yaml
 volumes:
   - ./data:/usr/src/app/data                           # SQLite databases and configuration
-  - /mnt/user/Stable_Diffusion_Data/outputs/StableQueue:/app/outputs
-  - /mnt/user/Stable_Diffusion_Data/models/Lora:/app/models/Lora
-  - /mnt/user/Stable_Diffusion_Data/models/Stable-diffusion:/app/models/Stable-diffusion
+  - /mnt/user/Stable_Diffusion_Data/outputs:/app/outputs
+  - /mnt/user/Stable_Diffusion_Data/models:/app/models
 ```
 
-**Important**: The `/data` directory contains both SQLite databases (`mobilesd_jobs.sqlite` and `mobilesd_models.sqlite`) and must be properly mapped to ensure data persistence across container updates.
+**Important**: 
+- The `/data` directory contains both SQLite databases (`mobilesd_jobs.sqlite` and `mobilesd_models.sqlite`) and must be properly mapped to ensure data persistence across container updates.
+- The consolidated `/app/models` mount provides access to all model types (checkpoints, LoRAs, etc.) through subdirectories within the single models volume.
 
 ## 🚀 Deployment
 

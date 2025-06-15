@@ -87,9 +87,9 @@ body {
 
 /* Content Container */
 .container {
-    max-width: 1400px;
+    max-width: 95%;
     margin: 0 auto;
-    padding: 2rem;
+    padding: 0.5rem;
 }
 
 .tab-content {
@@ -116,7 +116,7 @@ body {
     background-color: var(--bg-secondary);
     padding: 1.5rem;
     border-radius: 12px;
-    margin-bottom: 2rem;
+    margin-bottom: 1rem;
     box-shadow: 0 4px 15px var(--shadow);
     display: flex;
     flex-wrap: wrap;
@@ -244,8 +244,8 @@ body {
 /* Masonry Grid Layout */
 .models-list-grid {
     column-count: auto;
-    column-width: 300px;
-    column-gap: 20px;
+    column-width: 290px;
+    column-gap: 5px;
     padding: 0;
     margin: 0;
 }
@@ -253,7 +253,7 @@ body {
 @media (max-width: 768px) {
     .models-list-grid {
         column-width: 280px;
-        column-gap: 15px;
+        column-gap: 5px;
     }
 }
 
@@ -264,82 +264,76 @@ body {
     }
 }
 
-/* Model Card Styles */
+/* Model Card Styles - Civitai Style */
 .model-card {
-    background-color: var(--card-bg);
-    border-radius: 16px;
+    border-radius: 12px;
     overflow: hidden;
-    margin-bottom: 20px;
+    margin-bottom: 8px;
     break-inside: avoid;
-    box-shadow: 0 4px 20px var(--shadow);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     transition: all 0.3s ease;
     cursor: pointer;
     position: relative;
     display: inline-block;
     width: 100%;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    min-height: 400px;
 }
 
 .model-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 8px 30px var(--shadow-hover);
-    background-color: var(--card-hover);
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
 }
 
-/* Model Preview Image */
-.model-preview {
-    position: relative;
-    width: 100%;
-    overflow: hidden;
-    background: linear-gradient(45deg, var(--bg-tertiary), var(--bg-secondary));
+.model-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0.1) 0%,
+        rgba(0, 0, 0, 0.3) 60%,
+        rgba(0, 0, 0, 0.7) 100%
+    );
+    z-index: 1;
 }
 
-.model-preview img {
-    width: 100%;
-    height: auto;
-    display: block;
-    transition: transform 0.3s ease;
+.model-card.no-image {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
-.model-card:hover .model-preview img {
-    transform: scale(1.05);
+.model-card.no-image::before {
+    background: linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0.2) 0%,
+        rgba(0, 0, 0, 0.4) 60%,
+        rgba(0, 0, 0, 0.8) 100%
+    );
 }
 
-.model-preview .placeholder {
-    padding: 3rem 1rem;
-    text-align: center;
-    color: var(--text-muted);
-    background: linear-gradient(135deg, var(--bg-tertiary), var(--bg-secondary));
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 200px;
+/* Card Overlay Content */
+.model-card-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 1rem;
+    z-index: 2;
+    color: white;
 }
 
-.model-preview .placeholder .icon {
-    font-size: 4rem;
-    margin-bottom: 1rem;
-    opacity: 0.7;
-}
-
-.model-preview .placeholder .type-label {
+.model-card-title {
+    font-size: 1rem;
     font-weight: 600;
-    font-size: 1.1rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-/* Model Info Section */
-.model-info {
-    padding: 1.5rem;
-}
-
-.model-info h3 {
-    margin: 0 0 1rem 0;
-    font-size: 1.1rem;
-    font-weight: 600;
+    margin: 0 0 0.5rem 0;
     line-height: 1.3;
-    color: var(--text-primary);
+    color: white;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
@@ -347,75 +341,326 @@ body {
     -webkit-box-orient: vertical;
 }
 
-.model-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.model-type,
-.model-base {
-    font-size: 0.9rem;
-    color: var(--text-secondary);
-    font-weight: 500;
-}
-
-.model-type {
-    text-transform: capitalize;
-}
-
-.model-badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin: 1rem 0;
-}
-
-.model-availability,
-.model-metadata {
-    padding: 0.3rem 0.8rem;
-    border-radius: 20px;
+.model-card-hash {
     font-size: 0.8rem;
-    font-weight: 600;
-    text-transform: capitalize;
-    display: inline-block;
+    color: rgba(255, 255, 255, 0.9);
+    font-family: 'Courier New', monospace;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    margin-bottom: 0.5rem;
 }
 
-.model-availability.available {
+.model-card-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.5rem;
+}
+
+.civitai-logo {
+    width: 24px;
+    height: 24px;
+    opacity: 0.9;
+    transition: opacity 0.2s ease;
+    cursor: pointer;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 4px;
+}
+
+.civitai-logo:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.model-type-badge {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    backdrop-filter: blur(10px);
+}
+
+.model-placeholder-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 3rem;
+    color: rgba(255, 255, 255, 0.6);
+    z-index: 1;
+}
+
+/* Removed old model info styles - using overlay instead */
+
+.server-tag {
+    background-color: var(--accent-primary);
+    color: white;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-weight: 500;
+    box-shadow: 0 1px 3px rgba(74, 158, 255, 0.3);
+}
+
+.no-servers {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-style: italic;
+    padding: 0.25rem 0;
+}
+
+/* Job Queue Model Availability Indicators */
+.checkpoint-availability,
+.lora-availability {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+}
+
+.checkpoint-available,
+.lora-available {
     background-color: rgba(76, 175, 80, 0.2);
     color: var(--success);
     border: 1px solid rgba(76, 175, 80, 0.3);
 }
 
-.model-availability.unavailable {
+.checkpoint-unavailable,
+.lora-unavailable {
     background-color: rgba(244, 67, 54, 0.2);
     color: var(--error);
     border: 1px solid rgba(244, 67, 54, 0.3);
 }
 
-.model-metadata.complete {
-    background-color: rgba(74, 158, 255, 0.2);
-    color: var(--accent-primary);
-    border: 1px solid rgba(74, 158, 255, 0.3);
+.checkpoint-unknown,
+.lora-unknown,
+.lora-none {
+    background-color: rgba(158, 158, 158, 0.2);
+    color: var(--text-muted);
+    border: 1px solid rgba(158, 158, 158, 0.3);
 }
 
-.model-metadata.incomplete {
-    background-color: rgba(255, 152, 0, 0.2);
-    color: var(--warning);
-    border: 1px solid rgba(255, 152, 0, 0.3);
+.checkpoint-info {
+    margin-top: 0.25rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    line-height: 1.2;
 }
 
-.model-description {
-    margin: 1rem 0 0 0;
+.queue-job-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.queue-job-actions button {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+}
+
+/* Model Availability Warning Modal */
+.availability-warning {
+    text-align: center;
+    padding: 1rem 0;
+}
+
+.warning-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.warning-details {
+    text-align: left;
+    background-color: var(--bg-tertiary);
+    padding: 1rem;
+    border-radius: 8px;
+    margin: 1rem 0;
+    border-left: 4px solid var(--warning);
+}
+
+.warning-details p {
+    margin: 0.5rem 0;
+}
+
+.model-details {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
     font-size: 0.9rem;
     color: var(--text-secondary);
-    line-height: 1.5;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
+}
+
+.warning-actions {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.warning-actions button {
+    padding: 0.75rem 1.5rem;
+    min-width: 120px;
+}
+
+/* Models Sub-Navigation */
+.models-nav-tabs {
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    padding: 0;
+    margin: 0 0 2rem 0;
+    display: flex;
+    justify-content: flex-start;
+    gap: 0;
+    border-radius: 8px 8px 0 0;
+}
+
+.models-nav-button {
+    background: none;
+    border: none;
+    padding: 1rem 1.5rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 0.95rem;
+    font-weight: 500;
+    border-bottom: 3px solid transparent;
+    position: relative;
+}
+
+.models-nav-button:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.models-nav-button.active {
+    color: var(--accent-primary);
+    border-bottom-color: var(--accent-primary);
+    background-color: var(--bg-tertiary);
+}
+
+.models-sub-view {
+    display: none;
+}
+
+.models-sub-view.active {
+    display: block;
+    animation: fadeIn 0.3s ease-in;
+}
+
+/* Server Models Container */
+.server-models-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.server-section {
+    background-color: var(--card-bg);
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 4px 15px var(--shadow);
+}
+
+.server-section h3 {
+    margin: 0 0 1rem 0;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.server-status {
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.server-status.online {
+    background-color: rgba(76, 175, 80, 0.2);
+    color: var(--success);
+    border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.server-status.offline {
+    background-color: rgba(244, 67, 54, 0.2);
+    color: var(--error);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+.server-models-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+/* Availability Overview */
+.availability-overview-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.availability-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    background-color: var(--card-bg);
+    padding: 1.5rem;
+    border-radius: 12px;
+    text-align: center;
+    box-shadow: 0 4px 15px var(--shadow);
+}
+
+.stat-card h4 {
+    margin: 0 0 0.5rem 0;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.stat-card .stat-number {
+    font-size: 2rem;
+    font-weight: bold;
+    color: var(--accent-primary);
+    margin: 0;
+}
+
+.availability-table {
+    background-color: var(--card-bg);
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 4px 15px var(--shadow);
+    overflow-x: auto;
+}
+
+.availability-table table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.availability-table th,
+.availability-table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.availability-table th {
+    background-color: var(--bg-tertiary);
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 /* Loading States */
@@ -595,4 +840,164 @@ body {
     margin-top: 2rem;
     padding-top: 1rem;
     border-top: 1px solid var(--border-color);
+}
+
+/* Model Actions */
+.model-actions {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.civitai-fetch-btn {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    white-space: nowrap;
+}
+
+.civitai-fetch-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.civitai-fetch-btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 6px rgba(102, 126, 234, 0.2);
+}
+
+.civitai-fetch-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* AutoV2 Hash Calculation Button Styles */
+.calculate-hash-btn {
+    background: linear-gradient(135deg, #ff9800, #f57c00);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    white-space: nowrap;
+    margin-right: 8px;
+}
+
+.calculate-hash-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #f57c00, #e65100);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(255, 152, 0, 0.3);
+}
+
+.calculate-hash-btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 6px rgba(255, 152, 0, 0.2);
+}
+
+.calculate-hash-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Scan Options Styles */
+.scan-options {
+    background-color: var(--bg-tertiary);
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    margin: 12px 0;
+    width: 100%;
+}
+
+.scan-options label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin: 0;
+    font-weight: 400;
+}
+
+.scan-options input[type="checkbox"] {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    cursor: pointer;
+    position: relative;
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+}
+
+.scan-options input[type="checkbox"]:checked {
+    background-color: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.scan-options input[type="checkbox"]:checked::after {
+    content: '✓';
+    position: absolute;
+    color: white;
+    font-size: 12px;
+    font-weight: bold;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.scan-options input[type="checkbox"]:hover {
+    border-color: var(--accent-primary);
+}
+
+/* Responsive model cards */
+@media (max-width: 768px) {
+    .model-actions {
+        margin-top: 8px;
+        padding-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    
+    .civitai-fetch-btn,
+    .calculate-hash-btn {
+        padding: 6px 12px;
+        font-size: 0.8rem;
+        min-height: 32px;
+        margin-right: 0;
+    }
+    
+    .scan-options {
+        margin: 16px 0;
+    }
+    
+    .scan-options label {
+        font-size: 0.85rem;
+    }
 }

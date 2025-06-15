@@ -25,10 +25,12 @@ const schema = `
 -- Models table for storing checkpoint and LoRA information
 CREATE TABLE IF NOT EXISTS models (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL CHECK (type IN ('checkpoint', 'lora')),
+    name TEXT,
+    type TEXT CHECK (type IN ('checkpoint', 'lora') OR type IS NULL),
     local_path TEXT NOT NULL,
     filename TEXT NOT NULL,
+    preview_path TEXT,
+    preview_url TEXT,
     civitai_id TEXT,
     civitai_version_id TEXT,
     forge_format TEXT,
@@ -43,7 +45,9 @@ CREATE TABLE IF NOT EXISTS models (
     civitai_download_url TEXT,
     civitai_trained_words TEXT,
     civitai_file_size_kb INTEGER,
-    metadata_status TEXT NOT NULL DEFAULT 'incomplete' CHECK (metadata_status IN ('complete', 'incomplete', 'error')),
+    metadata_status TEXT NOT NULL DEFAULT 'incomplete' CHECK (metadata_status IN ('complete', 'partial', 'incomplete', 'none', 'error')),
+    metadata_source TEXT DEFAULT 'none' CHECK (metadata_source IN ('forge', 'civitai', 'embedded', 'none')),
+    has_embedded_metadata BOOLEAN DEFAULT FALSE,
     last_used TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -77,8 +81,72 @@ CREATE INDEX IF NOT EXISTS idx_model_server_availability ON model_server_availab
 
 // Initialize the database
 function initializeDatabase() {
-    db.exec(schema);
-    console.log("[ModelDB] Database schema initialized");
+    try {
+        // First, create tables if they don't exist
+        db.exec(schema);
+        console.log("[ModelDB] Database schema initialized");
+        
+        // Always run migration checks for existing databases
+        runMigrations();
+        
+    } catch (error) {
+        console.error("[ModelDB] Database initialization failed:", error);
+        throw error;
+    }
+}
+
+// Run database migrations
+function runMigrations() {
+    try {
+        console.log("[ModelDB] Checking for required database migrations...");
+        
+        // Check current table structure
+        const tableInfo = db.prepare("PRAGMA table_info(models)").all();
+        const columnNames = tableInfo.map(col => col.name);
+        
+        console.log("[ModelDB] Current columns:", columnNames.length, "columns found");
+        
+        let migrationsRun = 0;
+        
+        // Migration 1: Add preview_path column
+        if (!columnNames.includes('preview_path')) {
+            try {
+                console.log("[ModelDB] Running migration: Adding preview_path column");
+                db.exec('ALTER TABLE models ADD COLUMN preview_path TEXT');
+                console.log("[ModelDB] ✓ Added preview_path column");
+                migrationsRun++;
+            } catch (error) {
+                console.error("[ModelDB] ✗ Failed to add preview_path column:", error.message);
+            }
+        }
+        
+        // Migration 2: Add preview_url column
+        if (!columnNames.includes('preview_url')) {
+            try {
+                console.log("[ModelDB] Running migration: Adding preview_url column");
+                db.exec('ALTER TABLE models ADD COLUMN preview_url TEXT');
+                console.log("[ModelDB] ✓ Added preview_url column");
+                migrationsRun++;
+            } catch (error) {
+                console.error("[ModelDB] ✗ Failed to add preview_url column:", error.message);
+            }
+        }
+        
+        if (migrationsRun > 0) {
+            console.log(`[ModelDB] Completed ${migrationsRun} database migrations`);
+            
+            // Verify migrations
+            const newTableInfo = db.prepare("PRAGMA table_info(models)").all();
+            const newColumnNames = newTableInfo.map(col => col.name);
+            console.log("[ModelDB] Updated schema now has", newColumnNames.length, "columns");
+        } else {
+            console.log("[ModelDB] No migrations needed - database schema is up to date");
+        }
+        
+    } catch (error) {
+        console.error("[ModelDB] Migration check failed:", error);
+        // Don't throw here - let the app continue even if migrations fail
+    }
 }
 
 // @deprecated - In-memory cache no longer used with civitai_version_id only matching
@@ -91,6 +159,8 @@ function initializeDatabase() {
  * @param {string} model.type - Type of model ('checkpoint' or 'lora')
  * @param {string} model.local_path - Directory containing the model
  * @param {string} model.filename - Filename of the model
+ * @param {string} [model.preview_path] - Full path to preview image file
+ * @param {string} [model.preview_url] - Ready-to-use URL for preview image
  * @param {string} [model.hash_autov2] - AUTOV2 hash
  * @param {string} [model.hash_sha256] - SHA256 hash
  * @param {string} [model.civitai_id] - Civitai model ID
@@ -121,6 +191,8 @@ function addOrUpdateModel(model) {
             const updateStmt = db.prepare(`
                 UPDATE models SET 
                 name = ?, 
+                preview_path = COALESCE(?, preview_path),
+                preview_url = COALESCE(?, preview_url),
                 civitai_id = COALESCE(?, civitai_id),
                 civitai_version_id = COALESCE(?, civitai_version_id),
                 forge_format = COALESCE(?, forge_format),
@@ -135,12 +207,20 @@ function addOrUpdateModel(model) {
                 civitai_download_url = COALESCE(?, civitai_download_url),
                 civitai_trained_words = COALESCE(?, civitai_trained_words),
                 civitai_file_size_kb = COALESCE(?, civitai_file_size_kb),
+                metadata_status = COALESCE(?, metadata_status),
+                metadata_source = COALESCE(?, metadata_source),
+                has_embedded_metadata = COALESCE(?, has_embedded_metadata),
                 last_used = CURRENT_TIMESTAMP
                 WHERE id = ?
             `);
             
+            // Ensure boolean conversion for has_embedded_metadata
+            const hasEmbeddedMetadata = model.has_embedded_metadata === true ? 1 : (model.has_embedded_metadata === false ? 0 : null);
+            
             updateStmt.run(
                 model.name,
+                model.preview_path || null,
+                model.preview_url || null,
                 model.civitai_id || null,
                 model.civitai_version_id || null,
                 model.forge_format || null,
@@ -155,6 +235,9 @@ function addOrUpdateModel(model) {
                 model.civitai_download_url || null,
                 model.civitai_trained_words || null,
                 model.civitai_file_size_kb || null,
+                model.metadata_status || null,
+                model.metadata_source || null,
+                hasEmbeddedMetadata,
                 existing.id
             );
             
@@ -163,15 +246,20 @@ function addOrUpdateModel(model) {
             // Insert new model
             const insertStmt = db.prepare(`
                 INSERT INTO models (
-                    name, type, local_path, filename, civitai_id, civitai_version_id, forge_format, hash_autov2, hash_sha256, civitai_model_name, civitai_model_base, civitai_model_type, civitai_model_version_name, civitai_model_version_desc, civitai_model_version_date, civitai_download_url, civitai_trained_words, civitai_file_size_kb, last_used
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    name, type, local_path, filename, preview_path, preview_url, civitai_id, civitai_version_id, forge_format, hash_autov2, hash_sha256, civitai_model_name, civitai_model_base, civitai_model_type, civitai_model_version_name, civitai_model_version_desc, civitai_model_version_date, civitai_download_url, civitai_trained_words, civitai_file_size_kb, metadata_status, metadata_source, has_embedded_metadata, last_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             `);
+            
+            // Ensure boolean conversion for has_embedded_metadata
+            const hasEmbeddedMetadata = model.has_embedded_metadata === true ? 1 : 0;
             
             const info = insertStmt.run(
                 model.name,
                 model.type,
                 model.local_path,
                 model.filename,
+                model.preview_path || null,
+                model.preview_url || null,
                 model.civitai_id || null,
                 model.civitai_version_id || null,
                 model.forge_format || null,
@@ -185,7 +273,10 @@ function addOrUpdateModel(model) {
                 model.civitai_model_version_date || null,
                 model.civitai_download_url || null,
                 model.civitai_trained_words || null,
-                model.civitai_file_size_kb || null
+                model.civitai_file_size_kb || null,
+                model.metadata_status || 'incomplete',
+                model.metadata_source || 'none',
+                hasEmbeddedMetadata
             );
             
             modelId = info.lastInsertRowid;
@@ -265,47 +356,50 @@ function findModelFast(modelPath) {
 }
 
 /**
- * Check if a model is available locally by Civitai version ID
- * @param {string} civitaiVersionId - Civitai version ID
+ * Check if a model is available locally by hash
+ * @param {string} hash - Model hash (AutoV2 or SHA256)
  * @param {string} [type] - Model type filter ('checkpoint' or 'lora')
  * @returns {Object} Availability information
  */
-function checkModelAvailability(civitaiVersionId, type = null) {
+function checkModelAvailability(hash, type = null) {
     try {
-        if (!civitaiVersionId) {
-            return { available: false, reason: 'No Civitai version ID provided' };
+        if (!hash) {
+            return { available: false, reason: 'No model hash provided' };
         }
 
-        // Remove URN prefix if present: urn:air:flux1:checkpoint:civitai:618692@691639
-        let versionId = civitaiVersionId;
-        const urnMatch = civitaiVersionId.match(/urn:air:[^:]+:[^:]+:civitai:\d+@(\d+)/);
-        if (urnMatch) {
-            versionId = urnMatch[1];
-        } else if (!/^\d+$/.test(civitaiVersionId)) {
-            return { available: false, reason: 'Invalid Civitai version ID format - must be numeric' };
+        // Clean hash (remove any prefixes or formatting)
+        let cleanHash = hash.trim();
+        
+        // First try AutoV2 hash (10 characters)
+        let matches = findModelsByHash(cleanHash, 'autov2');
+        let hashType = 'autov2';
+        
+        // If no AutoV2 match, try SHA256 (64 characters)
+        if (matches.length === 0) {
+            matches = findModelsByHash(cleanHash, 'sha256');
+            hashType = 'sha256';
         }
-
-        // Search by version ID only
-        const query = type ? 
-                'SELECT * FROM models WHERE civitai_version_id = ? AND type = ? LIMIT 1' :
-                'SELECT * FROM models WHERE civitai_version_id = ? LIMIT 1';
-        const params = type ? [versionId, type] : [versionId];
-        const model = db.prepare(query).get(...params);
-            
-        if (model) {
-                return {
-                    available: true,
+        
+        // Filter by type if specified
+        if (type && matches.length > 0) {
+            matches = matches.filter(model => model.type === type);
+        }
+        
+        if (matches.length > 0) {
+            const model = matches[0]; // Take first match
+            return {
+                available: true,
                 model: model,
-                match_type: 'civitai_version_id',
-                    civitai_version_id: versionId,
+                match_type: hashType,
+                hash: cleanHash,
                 civitai_model_id: model.civitai_id
-                };
+            };
         }
 
         return { 
             available: false, 
-            reason: 'Model not found in local database',
-            civitai_version_id: versionId
+            reason: 'Model not found in local database (no hash match)',
+            hash: cleanHash
         };
 
     } catch (error) {
@@ -313,7 +407,7 @@ function checkModelAvailability(civitaiVersionId, type = null) {
         return { 
             available: false, 
             reason: `Database error: ${error.message}`,
-            civitai_version_id: versionId
+            hash: hash
         };
     }
 }
@@ -360,70 +454,100 @@ function importModelsFromForge(forgeModels, type = 'checkpoint') {
 }
 
 /**
- * Extract Civitai version ID from job generation parameters
+ * Extract model hash from job generation parameters
  * @param {Object} generationParams - Job generation parameters
- * @returns {Object} Object with civitaiVersionId and source field info
+ * @returns {Object} Object with hash and source field info
  */
-function extractCivitaiVersionId(generationParams) {
+function extractModelHash(generationParams) {
     if (!generationParams) {
-        return { civitaiVersionId: null, source: 'No generation parameters' };
+        return { hash: null, source: 'No generation parameters' };
     }
 
-    // 1. Check for direct civitai_version_id field
-    if (generationParams.civitai_version_id) {
-        return { 
-            civitaiVersionId: generationParams.civitai_version_id, 
-            source: 'civitai_version_id field' 
-        };
-    }
+    // Hash fields to check (in priority order)
+    const hashFields = [
+        'model_hash',      // Direct hash field
+        'checkpoint_hash', // Checkpoint-specific hash
+        'hash',           // Generic hash field
+        'autov2_hash',    // AutoV2 specific
+        'sha256_hash'     // SHA256 specific
+    ];
 
-    // 2. Check for Civitai URN in fluxMode (raw_generation_info)
-    if (generationParams.raw_generation_info) {
-        const fluxModeMatch = generationParams.raw_generation_info.match(/fluxMode:\s*([^,\s]+)/);
-        if (fluxModeMatch) {
-            const fluxValue = fluxModeMatch[1];
-            // Check if it's a Civitai URN: urn:air:flux1:checkpoint:civitai:618692@691639
-            const urnMatch = fluxValue.match(/urn:air:[^:]+:[^:]+:civitai:\d+@(\d+)/);
-            if (urnMatch) {
-                return { 
-                    civitaiVersionId: urnMatch[1], 
-                    source: 'fluxMode URN in raw_generation_info' 
-                };
-            }
-            // Check if it's just a version ID number
-            if (/^\d+$/.test(fluxValue)) {
-                return { 
-                    civitaiVersionId: fluxValue, 
-                    source: 'fluxMode version ID in raw_generation_info' 
-                };
-            }
-        }
-    }
-
-    // 3. Check for checkpoint/checkpoint_name field that might be a Civitai version ID
-    const checkpointFields = ['checkpoint', 'checkpoint_name', 'sd_checkpoint'];
-    for (const field of checkpointFields) {
+    // 1. Check for direct hash fields
+    for (const field of hashFields) {
         if (generationParams[field]) {
-            const value = generationParams[field];
-            // Check if it's a Civitai URN
-            const urnMatch = value.match(/urn:air:[^:]+:[^:]+:civitai:\d+@(\d+)/);
-            if (urnMatch) {
+            const hash = generationParams[field].trim();
+            if (hash && isValidHash(hash)) {
                 return { 
-                    civitaiVersionId: urnMatch[1], 
-                    source: `${field} field (URN)` 
-                };
-            }
-            // Check if it's just a version ID number
-            if (/^\d+$/.test(value)) {
-                return { 
-                    civitaiVersionId: value, 
-                    source: `${field} field (version ID)` 
+                    hash: hash, 
+                    source: `${field} field` 
                 };
             }
         }
     }
 
-    return { civitaiVersionId: null, source: 'No Civitai version ID found in any field' };
+    // 2. Check for hash in checkpoint metadata
+    if (generationParams.checkpoint && typeof generationParams.checkpoint === 'object' && generationParams.checkpoint.hash) {
+        const hash = generationParams.checkpoint.hash.trim();
+        if (hash && isValidHash(hash)) {
+            return { 
+                hash: hash, 
+                source: 'checkpoint.hash field' 
+            };
+        }
+    }
+
+    // 3. Check for hash in model info sections
+    if (generationParams.model_info && generationParams.model_info.hash) {
+        const hash = generationParams.model_info.hash.trim();
+        if (hash && isValidHash(hash)) {
+            return { 
+                hash: hash, 
+                source: 'model_info.hash field' 
+            };
+        }
+    }
+
+    // 4. Check raw_generation_info for hash patterns
+    if (generationParams.raw_generation_info) {
+        // Look for hash patterns in raw info
+        const hashMatches = generationParams.raw_generation_info.match(/hash:\s*([a-fA-F0-9]{10,64})/i);
+        if (hashMatches) {
+            const hash = hashMatches[1].trim();
+            if (isValidHash(hash)) {
+                return { 
+                    hash: hash, 
+                    source: 'hash pattern in raw_generation_info' 
+                };
+            }
+        }
+    }
+
+    return { hash: null, source: 'No model hash found in any field' };
+}
+
+/**
+ * Validate if a string looks like a valid model hash
+ * @param {string} hash - Hash to validate
+ * @returns {boolean} True if valid hash format
+ */
+function isValidHash(hash) {
+    if (!hash || typeof hash !== 'string') {
+        return false;
+    }
+    
+    const clean = hash.trim();
+    
+    // AutoV2 hash: 10 character lowercase alphanumeric
+    if (/^[a-f0-9]{10}$/.test(clean)) {
+        return true;
+    }
+    
+    // SHA256 hash: 64 character hex
+    if (/^[a-fA-F0-9]{64}$/.test(clean)) {
+        return true;
+    }
+    
+    return false;
 }
 
 /**
@@ -570,11 +694,13 @@ module.exports = {
     populateModelCache,
     importModelsFromForge,
     checkModelAvailability,
-    extractCivitaiVersionId,
+    extractModelHash,
     updateModelServerAvailability,
     removeModelServerAvailability,
     getModelServers,
     updateModelMetadataStatus,
     findModelsByHash,
-    resetDatabase
+    resetDatabase,
+    runMigrations,
+    isValidHash
 }; 

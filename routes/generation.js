@@ -4,7 +4,7 @@ const jobQueue = require('../utils/jobQueueHelpers'); // Import the entire modul
 const { readServersConfig } = require('../utils/configHelpers');
 const axios = require('axios');
 const path = require('path');
-const { checkModelAvailability, extractCivitaiVersionId } = require('../utils/modelDatabase');
+const { checkModelAvailability, extractModelHash } = require('../utils/modelDatabase');
 
 const router = express.Router();
 
@@ -73,33 +73,35 @@ router.get('/queue/jobs/:jobId/status', (req, res) => { // Can be synchronous if
             return res.status(404).json({ error: `Job with ID '${jobId}' not found.` });
         }
 
-        // Add model availability information using simplified Civitai version ID matching
+                // Add model availability information using hash-based matching
         let model_availability = {
             available: null,
-            reason: 'No Civitai version ID found'
+            reason: 'No model hash found'
         };
         
-        const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+        const { hash, source } = extractModelHash(job.generation_params);
         
-        if (civitaiVersionId) {
-            const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
-                model_availability = {
-                    available: availability.available,
-                    reason: availability.reason || null,
-                    civitai_model_id: availability.civitai_model_id || null,
-                    civitai_version_id: availability.civitai_version_id || null,
+        if (hash) {
+            const availability = checkModelAvailability(hash, 'checkpoint');
+            model_availability = {
+                available: availability.available,
+                reason: availability.reason || null,
+                civitai_model_id: availability.civitai_model_id || null,
+                hash: availability.hash || hash,
+                match_type: availability.match_type || null,
                 checked_field: source,
-                model_identifier: civitaiVersionId
-                    };
-                } else {
-                    model_availability = {
-                        available: false,
+                model_identifier: hash
+            };
+        } else {
+            model_availability = {
+                available: false,
                 reason: source,
-                        civitai_model_id: null,
-                        civitai_version_id: null,
+                civitai_model_id: null,
+                hash: null,
+                match_type: null,
                 checked_field: 'N/A',
                 model_identifier: null
-                    };
+            };
         }
 
         // The job object from getJobById already has generation_params and result_details parsed
@@ -139,28 +141,30 @@ router.get('/queue/jobs', (req, res) => {
         
         const jobs = jobQueue.getAllJobs(options);
         
-        // Enhance jobs with model availability information using simplified Civitai version ID matching
+                // Enhance jobs with model availability information using hash-based matching
         const enhancedJobs = jobs.map(job => {
             const enhancedJob = { ...job };
             
-            const { civitaiVersionId, source } = extractCivitaiVersionId(job.generation_params);
+            const { hash, source } = extractModelHash(job.generation_params);
             
-            if (civitaiVersionId) {
-                const availability = checkModelAvailability(civitaiVersionId, 'checkpoint');
-                        enhancedJob.model_availability = {
-                            available: availability.available,
-                            reason: availability.reason || null,
-                            civitai_model_id: availability.civitai_model_id || null,
-                            civitai_version_id: availability.civitai_version_id || null,
+            if (hash) {
+                const availability = checkModelAvailability(hash, 'checkpoint');
+                enhancedJob.model_availability = {
+                    available: availability.available,
+                    reason: availability.reason || null,
+                    civitai_model_id: availability.civitai_model_id || null,
+                    hash: availability.hash || hash,
+                    match_type: availability.match_type || null,
                     checked_field: source,
-                    model_identifier: civitaiVersionId
-                            };
-                        } else {
-                            enhancedJob.model_availability = {
-                                available: false,
+                    model_identifier: hash
+                };
+            } else {
+                enhancedJob.model_availability = {
+                    available: false,
                     reason: source,
-                                civitai_model_id: null,
-                                civitai_version_id: null,
+                    civitai_model_id: null,
+                    hash: null,
+                    match_type: null,
                     checked_field: 'N/A',
                     model_identifier: null
                 };
@@ -408,29 +412,24 @@ router.post('/checkpoint-verify', async (req, res) => {
         const modelDB = require('../utils/modelDatabase');
         
         // Check if the provided value is a valid Civitai version ID
+        // Check if the provided value is a valid hash
         const availability = modelDB.checkModelAvailability(civitai_version_id, 'checkpoint');
         
-        // Extract version ID for response
-        const { civitaiVersionId, source } = modelDB.extractCivitaiVersionId({ 
-            civitai_version_id: civitai_version_id 
-        });
-        
-        // Return simplified verification results
+        // Return simplified verification results  
         res.json({
             success: true,
-            civitai_version_id: civitaiVersionId,
-            source: source,
-            availability: {
-                available: availability.available,
-                reason: availability.reason,
-                civitai_model_id: availability.civitai_model_id,
-                match_type: availability.match_type
-            },
+            provided_value: civitai_version_id,
+            interpreted_as: 'model_hash',
+            available: availability.available,
+            reason: availability.reason,
+            hash: availability.hash,
+            match_type: availability.match_type,
             model_info: availability.model ? {
                 id: availability.model.id,
                 name: availability.model.name,
                 filename: availability.model.filename,
-                forge_format: availability.model.forge_format
+                hash_autov2: availability.model.hash_autov2,
+                hash_sha256: availability.model.hash_sha256
             } : null
         });
     } catch (error) {

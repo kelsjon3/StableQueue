@@ -866,7 +866,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${loraAvailabilityHtml}</td>
                 <td>${job.target_server_alias || 'Unknown'}</td>
                 <td>${createdDate}</td>
-                <td>${job.model_availability?.civitai_version_id || 'N/A'}</td>
+                <td>${job.model_availability?.hash || 'N/A'}</td>
                 <td>
                     <div class="queue-job-actions">
                         <button class="secondary-button view-details-btn" data-job-id="${job.mobilesd_job_id}">Details</button>
@@ -1329,18 +1329,42 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to determine availability based on model data
     function getAvailabilityStatus(model) {
-        // For now, assume all models in database are available locally
-        // This can be enhanced later with server availability tracking
+        // Check if we have server availability data
+        if (model.server_availability && Array.isArray(model.server_availability)) {
+            return model.server_availability.length > 0;
+        }
+        
+        // Fallback: assume available if model is in database (backward compatibility)
         return true;
+    }
+    
+    // Function to get detailed server availability info
+    function getServerAvailabilityInfo(model) {
+        if (model.server_availability && Array.isArray(model.server_availability)) {
+            return model.server_availability.map(server => ({
+                server_id: server.server_id,
+                last_seen: server.last_seen
+            }));
+        }
+        return [];
+    }
+    
+    // Function to get availability status text
+    function getAvailabilityStatusText(model) {
+        const availableServers = getServerAvailabilityInfo(model);
+        if (availableServers.length === 0) {
+            return 'Not available on any server';
+        } else if (availableServers.length === 1) {
+            return `Available on 1 server (${availableServers[0].server_id})`;
+        } else {
+            return `Available on ${availableServers.length} servers`;
+        }
     }
     
     // Function to get preview URL for a model
     function getModelPreviewUrl(model) {
-        if (model.filename) {
-            const encodedPath = encodeURIComponent(model.filename);
-            return `/api/v1/models/${encodedPath}/preview?type=${model.type || 'checkpoint'}`;
-        }
-        return '/images/no-preview.png';
+        // Use the ready-made preview_url from database (no construction needed)
+        return model.preview_url || null;
     }
 
     // Function to fetch and display models
@@ -1478,54 +1502,43 @@ document.addEventListener('DOMContentLoaded', () => {
             const card = document.createElement('div');
             card.className = 'model-card';
             
-            // Determine availability status
-            const isAvailable = getAvailabilityStatus(model);
-            const availabilityClass = isAvailable ? 'available' : 'unavailable';
-            
-            // Determine metadata status
-            const metadataStatus = getMetadataStatus(model);
-            const metadataClass = metadataStatus;
-            
             // Safely escape text content
             const safeName = (model.name || model.filename || 'Unknown Model').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const safeType = (model.type || 'Unknown Type').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const safeBaseModel = (model.civitai_model_base || 'Unknown Base').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const safeDescription = model.civitai_model_version_desc ? 
-                model.civitai_model_version_desc.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
             
-            // Get model type icon
+            // Get model type icon for placeholder
             const typeIcon = model.type === 'lora' ? '🎨' : '🖼️';
             
             // Get preview URL for the model
             const previewUrl = getModelPreviewUrl(model);
+            console.log(`Model: ${model.name}, Preview URL: ${previewUrl}`);
             
-            // Create preview content - try to load image, fallback to placeholder
-            const previewContent = `
-                <img src="${previewUrl}" 
-                     alt="${safeName}" 
-                     loading="lazy" 
-                     onerror="this.parentElement.innerHTML='<div class=\\'placeholder\\'><div class=\\'icon\\'>${typeIcon}</div><div class=\\'type-label\\'>${safeType}</div></div>'">
-            `;
+            // Get AutoV2 hash for display
+            const hash = model.hash_autov2 || model.hash_sha256;
+            const hashDisplay = hash ? `Hash: ${hash}` : 'No hash calculated';
             
+            // Get Civitai URL if available
+            const civitaiUrl = model.civitai_id ? `https://civitai.com/models/${model.civitai_id}` : null;
+            
+            // Set background image or fallback class
+            if (previewUrl) {
+                console.log(`Setting background image for ${model.name}: ${previewUrl}`);
+                card.style.backgroundImage = `url(${previewUrl})`;
+            } else {
+                console.log(`No preview image for ${model.name}, using fallback`);
+                card.classList.add('no-image');
+            }
+            
+            // Create overlay content
             card.innerHTML = `
-                <div class="model-preview">
-                    ${previewContent}
-                </div>
-                <div class="model-info">
-                    <h3>${safeName}</h3>
-                    <div class="model-meta">
-                        <div class="model-type">${safeType}</div>
-                        <div class="model-base">${safeBaseModel}</div>
+                ${!previewUrl ? `<div class="model-placeholder-icon">${typeIcon}</div>` : ''}
+                <div class="model-card-overlay">
+                    <h3 class="model-card-title" title="${safeName}">${safeName}</h3>
+                    <div class="model-card-hash">${hashDisplay}</div>
+                    <div class="model-card-actions">
+                        <div class="model-type-badge">${safeType}</div>
+                        ${civitaiUrl ? `<img src="/civitai-logo.png" class="civitai-logo" title="View on Civitai" onclick="window.open('${civitaiUrl}', '_blank')">` : ''}
                     </div>
-                    <div class="model-badges">
-                        <span class="model-availability ${availabilityClass}">
-                            ${isAvailable ? 'Available' : 'Unavailable'}
-                        </span>
-                        <span class="model-metadata ${metadataClass}">
-                            ${metadataStatus}
-                        </span>
-                    </div>
-                    ${safeDescription ? `<div class="model-description">${safeDescription}</div>` : ''}
                 </div>
             `;
             
@@ -1538,13 +1551,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const scanBtn = document.getElementById('scan-models-btn');
         if (!scanBtn) return;
         
+        // Get hash calculation option
+        const calculateHashesCheckbox = document.getElementById('calculate-hashes-checkbox');
+        const calculateHashes = calculateHashesCheckbox ? calculateHashesCheckbox.checked : false;
+        
         scanBtn.disabled = true;
         const originalText = scanBtn.textContent;
-        scanBtn.textContent = 'Scanning...';
+        scanBtn.textContent = calculateHashes ? 'Scanning + Calculating Hashes...' : 'Scanning...';
         
         try {
-            console.log('Starting model scan...');
-            const response = await fetch('/api/v1/models/scan', { method: 'POST' });
+            console.log('Starting model scan...', { calculateHashes });
+            const response = await fetch('/api/v1/models/scan', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ calculateHashes })
+            });
             
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -1573,6 +1596,157 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             scanBtn.disabled = false;
             scanBtn.textContent = originalText;
+        }
+    }
+
+    // Function to handle Civitai fetch for individual models
+    async function handleCivitaiFetch(event) {
+        const button = event.target;
+        const modelId = button.dataset.modelId;
+        
+        if (!modelId) {
+            console.error('No model ID found for Civitai fetch');
+            return;
+        }
+        
+        button.disabled = true;
+        const originalText = button.textContent;
+        button.textContent = '🔄 Fetching...';
+        
+        try {
+            console.log(`Fetching Civitai metadata for model ID: ${modelId}`);
+            const response = await fetch(`/api/v1/models/${modelId}/fetch-from-civitai`, { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log('Civitai fetch complete!', data);
+                
+                // Show success message with details
+                const metadata = data.metadata;
+                let successMessage = `Successfully fetched metadata from Civitai!\n\n`;
+                successMessage += `Model: ${metadata.model_name}\n`;
+                successMessage += `Version: ${metadata.version_name}\n`;
+                successMessage += `Base Model: ${metadata.base_model}\n`;
+                if (metadata.preview_downloaded) {
+                    successMessage += `✅ Preview image downloaded\n`;
+                }
+                if (metadata.trained_words?.length > 0) {
+                    successMessage += `Trigger words: ${metadata.trained_words.join(', ')}\n`;
+                }
+                
+                alert(successMessage);
+                
+                // Refresh models display to show updated information
+                await fetchAndDisplayModels();
+            } else {
+                throw new Error(data.message || 'Civitai fetch failed');
+            }
+        } catch (error) {
+            console.error('Civitai fetch failed:', error);
+            alert('Failed to fetch from Civitai: ' + error.message);
+        } finally {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+
+    // Function to handle hash calculation for individual models
+    async function handleHashCalculation(event) {
+        const button = event.target;
+        const modelId = button.dataset.modelId;
+        
+        if (!modelId) {
+            console.error('No model ID found for hash calculation');
+            return;
+        }
+        
+        try {
+            // First get hash info to check file size and show warnings
+            const infoResponse = await fetch(`/api/v1/models/${modelId}/hash-info`);
+            
+            if (!infoResponse.ok) {
+                throw new Error(`Failed to get model info: ${infoResponse.status}`);
+            }
+            
+            const infoData = await infoResponse.json();
+            
+            if (!infoData.success) {
+                throw new Error(infoData.message || 'Failed to get model info');
+            }
+            
+            const fileInfo = infoData.fileInfo;
+            
+            // Check if hash calculation is allowed
+            if (!fileInfo.canCalculateHash) {
+                alert(`Cannot calculate hash: ${fileInfo.reason}`);
+                return;
+            }
+            
+            // Show confirmation dialog with file size and time estimate
+            let confirmMessage = `Calculate AutoV2 hash for this model?\n\n`;
+            confirmMessage += `File size: ${fileInfo.size}\n`;
+            if (fileInfo.estimatedTimeDisplay) {
+                confirmMessage += `Estimated time: ${fileInfo.estimatedTimeDisplay}\n`;
+            }
+            confirmMessage += `\nThis operation cannot be cancelled once started.`;
+            
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+            
+            // Start hash calculation
+            button.disabled = true;
+            const originalText = button.textContent;
+            button.textContent = '🔄 Calculating...';
+            
+            console.log(`Starting hash calculation for model ID: ${modelId}`);
+            const response = await fetch(`/api/v1/models/${modelId}/calculate-hash`, { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log('Hash calculation complete!', data);
+                
+                // Show success message with details
+                let successMessage = `Hash calculated successfully!\n\n`;
+                successMessage += `AutoV2: ${data.hash}\n`;
+                successMessage += `File size: ${data.fileSize}\n`;
+                successMessage += `Calculation time: ${data.calculationTime}`;
+                
+                alert(successMessage);
+                
+                // Refresh models display to show updated information
+                await fetchAndDisplayModels();
+            } else {
+                throw new Error(data.message || 'Hash calculation failed');
+            }
+        } catch (error) {
+            console.error('Hash calculation failed:', error);
+            alert('Hash calculation failed: ' + error.message);
+        } finally {
+            button.disabled = false;
+            button.textContent = button.textContent.includes('Calculating') ? '🔍 Calculate Hash' : button.textContent;
         }
     }
 
@@ -1717,4 +1891,150 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize models tab (this will be called from the main initialization)
     initializeModelsTab();
+
+    // Function to check model availability and show warnings
+    async function checkModelAvailabilityAndWarn(modelHash, modelName = 'Unknown Model') {
+        if (!modelHash) {
+            return {
+                available: false,
+                reason: 'No model hash provided',
+                showWarning: false  // Don't show warning for missing hash
+            };
+        }
+        
+        try {
+            const response = await fetch('/api/v1/checkpoint-verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    civitai_version_id: modelHash  // API still uses this parameter name but now expects hash
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            return {
+                available: data.available === true,
+                reason: data.reason || 'Unknown',
+                hash: data.hash,
+                matchType: data.match_type,
+                modelInfo: data.model_info,
+                showWarning: true
+            };
+        } catch (error) {
+            console.error('Error checking model availability:', error);
+            return {
+                available: false,
+                reason: 'Error checking availability: ' + error.message,
+                showWarning: true
+            };
+        }
+    }
+    
+    // Function to display model availability warning dialog
+    function showModelAvailabilityWarning(availabilityResult, modelName, onProceed, onCancel) {
+        const { available, reason, hash, matchType, modelInfo } = availabilityResult;
+        
+        // Create modal content
+        const warningContent = `
+            <div class="availability-warning">
+                <div class="warning-icon">⚠️</div>
+                <h3>Model Availability Warning</h3>
+                <div class="warning-details">
+                    <p><strong>Model:</strong> ${escapeHtml(modelName)}</p>
+                    <p><strong>Status:</strong> ${available ? '✅ Available' : '❌ Not Available'}</p>
+                    <p><strong>Details:</strong> ${escapeHtml(reason)}</p>
+                    ${hash ? `<p><strong>Hash:</strong> ${escapeHtml(hash)} (${matchType || 'unknown type'})</p>` : ''}
+                    ${modelInfo ? `
+                        <div class="model-details">
+                            <p><strong>Found in database:</strong> ${escapeHtml(modelInfo.name || 'Unknown')}</p>
+                            <p><strong>Filename:</strong> ${escapeHtml(modelInfo.filename || 'Unknown')}</p>
+                            ${modelInfo.hash_autov2 ? `<p><strong>AutoV2 Hash:</strong> ${escapeHtml(modelInfo.hash_autov2)}</p>` : ''}
+                            ${modelInfo.hash_sha256 ? `<p><strong>SHA256 Hash:</strong> ${escapeHtml(modelInfo.hash_sha256)}</p>` : ''}
+                        </div>
+                    ` : ''}
+                </div>
+                <div class="warning-actions">
+                    ${available ? 
+                        '<button id="proceed-btn" class="primary-button">Proceed with Job</button>' : 
+                        '<button id="proceed-anyway-btn" class="danger-button">Submit Anyway (Job may fail)</button>'
+                    }
+                    <button id="cancel-btn" class="secondary-button">Cancel</button>
+                </div>
+            </div>
+        `;
+        
+        // Show modal
+        showGenericModal('Model Availability Check', warningContent);
+        
+        // Add event listeners
+        const proceedBtn = document.getElementById(available ? 'proceed-btn' : 'proceed-anyway-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
+        
+        if (proceedBtn) {
+            proceedBtn.addEventListener('click', () => {
+                hideGenericModal();
+                if (onProceed) onProceed();
+            });
+        }
+        
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => {
+                hideGenericModal();
+                if (onCancel) onCancel();
+            });
+        }
+    }
+    
+    // Generic modal functions
+    function showGenericModal(title, content) {
+        // Remove existing modal if any
+        let existingModal = document.getElementById('generic-modal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.id = 'generic-modal';
+        modal.className = 'modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <span class="close-modal">&times;</span>
+                <div class="modal-body">
+                    <h3>${escapeHtml(title)}</h3>
+                    ${content}
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        modal.style.display = 'block';
+        
+        // Add close event listener
+        const closeBtn = modal.querySelector('.close-modal');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', hideGenericModal);
+        }
+        
+        // Close on outside click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                hideGenericModal();
+            }
+        });
+    }
+    
+    function hideGenericModal() {
+        const modal = document.getElementById('generic-modal');
+        if (modal) {
+            modal.style.display = 'none';
+            modal.remove();
+        }
+    }
 });
