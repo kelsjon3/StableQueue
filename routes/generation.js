@@ -83,25 +83,25 @@ router.get('/queue/jobs/:jobId/status', (req, res) => { // Can be synchronous if
         
         if (hash) {
             const availability = checkModelAvailability(hash, 'checkpoint');
-            model_availability = {
-                available: availability.available,
-                reason: availability.reason || null,
-                civitai_model_id: availability.civitai_model_id || null,
+                model_availability = {
+                    available: availability.available,
+                    reason: availability.reason || null,
+                    civitai_model_id: availability.civitai_model_id || null,
                 hash: availability.hash || hash,
                 match_type: availability.match_type || null,
                 checked_field: source,
                 model_identifier: hash
-            };
-        } else {
-            model_availability = {
-                available: false,
+                    };
+                } else {
+                    model_availability = {
+                        available: false,
                 reason: source,
-                civitai_model_id: null,
+                        civitai_model_id: null,
                 hash: null,
                 match_type: null,
                 checked_field: 'N/A',
                 model_identifier: null
-            };
+                    };
         }
 
         // The job object from getJobById already has generation_params and result_details parsed
@@ -149,20 +149,20 @@ router.get('/queue/jobs', (req, res) => {
             
             if (hash) {
                 const availability = checkModelAvailability(hash, 'checkpoint');
-                enhancedJob.model_availability = {
-                    available: availability.available,
-                    reason: availability.reason || null,
-                    civitai_model_id: availability.civitai_model_id || null,
+                        enhancedJob.model_availability = {
+                            available: availability.available,
+                            reason: availability.reason || null,
+                            civitai_model_id: availability.civitai_model_id || null,
                     hash: availability.hash || hash,
                     match_type: availability.match_type || null,
                     checked_field: source,
                     model_identifier: hash
-                };
-            } else {
-                enhancedJob.model_availability = {
-                    available: false,
+                            };
+                        } else {
+                            enhancedJob.model_availability = {
+                                available: false,
                     reason: source,
-                    civitai_model_id: null,
+                                civitai_model_id: null,
                     hash: null,
                     match_type: null,
                     checked_field: 'N/A',
@@ -415,13 +415,13 @@ router.post('/checkpoint-verify', async (req, res) => {
         // Check if the provided value is a valid hash
         const availability = modelDB.checkModelAvailability(civitai_version_id, 'checkpoint');
         
-        // Return simplified verification results  
+        // Return simplified verification results
         res.json({
             success: true,
             provided_value: civitai_version_id,
             interpreted_as: 'model_hash',
-            available: availability.available,
-            reason: availability.reason,
+                available: availability.available,
+                reason: availability.reason,
             hash: availability.hash,
             match_type: availability.match_type,
             model_info: availability.model ? {

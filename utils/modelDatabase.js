@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS models (
     civitai_download_url TEXT,
     civitai_trained_words TEXT,
     civitai_file_size_kb INTEGER,
+    civitai_nsfw BOOLEAN DEFAULT FALSE,
+    civitai_blurhash TEXT,
     metadata_status TEXT NOT NULL DEFAULT 'incomplete' CHECK (metadata_status IN ('complete', 'partial', 'incomplete', 'none', 'error')),
     metadata_source TEXT DEFAULT 'none' CHECK (metadata_source IN ('forge', 'civitai', 'embedded', 'none')),
     has_embedded_metadata BOOLEAN DEFAULT FALSE,
@@ -132,6 +134,30 @@ function runMigrations() {
             }
         }
         
+        // Migration 3: Add civitai_nsfw column
+        if (!columnNames.includes('civitai_nsfw')) {
+            try {
+                console.log("[ModelDB] Running migration: Adding civitai_nsfw column");
+                db.exec('ALTER TABLE models ADD COLUMN civitai_nsfw BOOLEAN DEFAULT FALSE');
+                console.log("[ModelDB] ✓ Added civitai_nsfw column");
+                migrationsRun++;
+            } catch (error) {
+                console.error("[ModelDB] ✗ Failed to add civitai_nsfw column:", error.message);
+            }
+        }
+        
+        // Migration 4: Add civitai_blurhash column
+        if (!columnNames.includes('civitai_blurhash')) {
+            try {
+                console.log("[ModelDB] Running migration: Adding civitai_blurhash column");
+                db.exec('ALTER TABLE models ADD COLUMN civitai_blurhash TEXT');
+                console.log("[ModelDB] ✓ Added civitai_blurhash column");
+                migrationsRun++;
+            } catch (error) {
+                console.error("[ModelDB] ✗ Failed to add civitai_blurhash column:", error.message);
+            }
+        }
+        
         if (migrationsRun > 0) {
             console.log(`[ModelDB] Completed ${migrationsRun} database migrations`);
             
@@ -207,6 +233,8 @@ function addOrUpdateModel(model) {
                 civitai_download_url = COALESCE(?, civitai_download_url),
                 civitai_trained_words = COALESCE(?, civitai_trained_words),
                 civitai_file_size_kb = COALESCE(?, civitai_file_size_kb),
+                civitai_nsfw = COALESCE(?, civitai_nsfw),
+                civitai_blurhash = COALESCE(?, civitai_blurhash),
                 metadata_status = COALESCE(?, metadata_status),
                 metadata_source = COALESCE(?, metadata_source),
                 has_embedded_metadata = COALESCE(?, has_embedded_metadata),
@@ -235,6 +263,8 @@ function addOrUpdateModel(model) {
                 model.civitai_download_url || null,
                 model.civitai_trained_words || null,
                 model.civitai_file_size_kb || null,
+                model.civitai_nsfw ? 1 : 0,
+                model.civitai_blurhash || null,
                 model.metadata_status || null,
                 model.metadata_source || null,
                 hasEmbeddedMetadata,
@@ -246,8 +276,8 @@ function addOrUpdateModel(model) {
             // Insert new model
             const insertStmt = db.prepare(`
                 INSERT INTO models (
-                    name, type, local_path, filename, preview_path, preview_url, civitai_id, civitai_version_id, forge_format, hash_autov2, hash_sha256, civitai_model_name, civitai_model_base, civitai_model_type, civitai_model_version_name, civitai_model_version_desc, civitai_model_version_date, civitai_download_url, civitai_trained_words, civitai_file_size_kb, metadata_status, metadata_source, has_embedded_metadata, last_used
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    name, type, local_path, filename, preview_path, preview_url, civitai_id, civitai_version_id, forge_format, hash_autov2, hash_sha256, civitai_model_name, civitai_model_base, civitai_model_type, civitai_model_version_name, civitai_model_version_desc, civitai_model_version_date, civitai_download_url, civitai_trained_words, civitai_file_size_kb, civitai_nsfw, civitai_blurhash, metadata_status, metadata_source, has_embedded_metadata, last_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             `);
             
             // Ensure boolean conversion for has_embedded_metadata
@@ -274,6 +304,8 @@ function addOrUpdateModel(model) {
                 model.civitai_download_url || null,
                 model.civitai_trained_words || null,
                 model.civitai_file_size_kb || null,
+                model.civitai_nsfw ? 1 : 0,
+                model.civitai_blurhash || null,
                 model.metadata_status || 'incomplete',
                 model.metadata_source || 'none',
                 hasEmbeddedMetadata

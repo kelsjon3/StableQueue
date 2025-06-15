@@ -659,7 +659,9 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
             civitai_model_version_date: metadata.updated_at || metadata.createdAt || null,
             civitai_download_url: metadata.downloadUrl || null,
             civitai_trained_words: trained_words,
-            civitai_file_size_kb: file_size_kb
+            civitai_file_size_kb: file_size_kb,
+            civitai_nsfw: metadata.model?.nsfw || metadata.nsfw || false,
+            civitai_blurhash: null // Will be populated when images are processed
         });
         
         // Save metadata using the Forge-compatible path
@@ -680,7 +682,20 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
                 if (images && images.length > 0) {
                     // Use the first image as preview
                     const previewUrl = images[0].url;
+                    const blurhash = images[0].hash;
                     console.log(`[Models] Downloading preview image from: ${previewUrl}`);
+                    
+                    // Update model with blurhash if available
+                    if (blurhash) {
+                        modelDB.addOrUpdateModel({
+                            name: modelName,
+                            type: type,
+                            local_path: directory,
+                            filename: filename,
+                            civitai_blurhash: blurhash
+                        });
+                        console.log(`[Models] Updated model with blurhash: ${blurhash.substring(0, 16)}...`);
+                    }
                     
                     // Download the image
                     const imageResponse = await rateLimitedCivitaiRequest(previewUrl, { responseType: 'arraybuffer' });
@@ -876,7 +891,9 @@ router.post('/models/scan', async (req, res) => {
                         civitai_model_version_date: toSafeValue(metadata.createdAt || metadata.model?.createdAt),
                         civitai_download_url: toSafeValue(metadata.downloadUrl || metadata.model?.downloadUrl),
                         civitai_trained_words: toSafeValue(getEnhancedActivationText(metadata)),
-                        civitai_file_size_kb: toSafeValue(metadata.fileSizeKB || metadata['preferred weight'])
+                        civitai_file_size_kb: toSafeValue(metadata.fileSizeKB || metadata['preferred weight']),
+                        civitai_nsfw: metadata.model?.nsfw || metadata.nsfw || false,
+                        civitai_blurhash: null // Will be populated when images are processed
                     });
                 }
                 
@@ -963,7 +980,8 @@ router.post('/models/scan', async (req, res) => {
                         const fieldsToCheck = [
                             'civitai_trained_words', 'civitai_model_base', 'civitai_model_type',
                             'civitai_model_name', 'civitai_model_version_name', 'civitai_model_version_desc',
-                            'civitai_model_version_date', 'civitai_download_url', 'civitai_file_size_kb'
+                            'civitai_model_version_date', 'civitai_download_url', 'civitai_file_size_kb',
+                            'civitai_nsfw', 'civitai_blurhash'
                         ];
                         
                         for (const field of fieldsToCheck) {
@@ -1463,6 +1481,8 @@ router.post('/models/:id/fetch-from-civitai', async (req, res) => {
             civitai_model_version_date: versionData.createdAt,
             civitai_download_url: versionData.downloadUrl,
             civitai_trained_words: versionData.trainedWords ? JSON.stringify(versionData.trainedWords) : null,
+            civitai_nsfw: versionData.model.nsfw || false,
+            civitai_blurhash: versionData.images && versionData.images.length > 0 ? versionData.images[0].hash : null,
             metadata_status: 'complete',
             metadata_source: 'civitai'
         };

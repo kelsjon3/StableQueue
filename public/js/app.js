@@ -1502,6 +1502,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const card = document.createElement('div');
             card.className = 'model-card';
             
+            // Add NSFW data attribute for blur functionality
+            card.dataset.nsfw = model.civitai_nsfw ? 'true' : 'false';
+            
             // Safely escape text content
             const safeName = (model.name || model.filename || 'Unknown Model').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const safeType = (model.type || 'Unknown Type').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1538,12 +1541,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="model-card-actions">
                         <div class="model-type-badge">${safeType}</div>
                         ${civitaiUrl ? `<img src="/civitai-logo.png" class="civitai-logo" title="View on Civitai" onclick="window.open('${civitaiUrl}', '_blank')">` : ''}
+                        <img src="/todo-list-icon.png" class="todo-list-icon" title="Retrieve Missing Details" onclick="showRetrieveDetailsModal('${model.id}')">
                     </div>
                 </div>
             `;
             
             container.appendChild(card);
         });
+        
+        // Apply NSFW blur after rendering
+        handleNsfwBlurToggle();
     }
 
     // Function to handle model scanning
@@ -1886,6 +1893,14 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
+        // Setup NSFW blur toggle
+        const blurNsfwCheckbox = document.getElementById('blur-nsfw-checkbox');
+        if (blurNsfwCheckbox) {
+            blurNsfwCheckbox.addEventListener('change', handleNsfwBlurToggle);
+            // Apply initial blur state
+            handleNsfwBlurToggle();
+        }
+
         // No need for additional nav click handler - it's already handled in main nav setup
     }
 
@@ -2030,11 +2045,63 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    function hideGenericModal() {
+    // Make hideGenericModal globally accessible
+    window.hideGenericModal = function() {
         const modal = document.getElementById('generic-modal');
         if (modal) {
             modal.style.display = 'none';
             modal.remove();
         }
+    };
+
+    // Show retrieve details modal - make it globally accessible
+    window.showRetrieveDetailsModal = function(modelId) {
+        const modalContent = `
+            <div style="margin: 1rem 0;">
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" style="margin-right: 0.5rem;"> Get Preview Image from Civitai
+                    </label>
+                </div>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" style="margin-right: 0.5rem;"> Generate Missing Hash
+                    </label>
+                </div>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" style="margin-right: 0.5rem;"> Rescan File
+                    </label>
+                </div>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" style="margin-right: 0.5rem;"> Retrieve Details From Civitai
+                    </label>
+                </div>
+            </div>
+            <div style="display: flex; justify-content: center; gap: 1rem; margin-top: 1.5rem;">
+                <button onclick="hideGenericModal()" style="padding: 0.5rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button onclick="hideGenericModal()" style="padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">OK</button>
+            </div>
+        `;
+        
+        showGenericModal('Retrieve Missing Details', modalContent);
+    };
+
+    // Handle NSFW blur toggle
+    function handleNsfwBlurToggle() {
+        const blurNsfwCheckbox = document.getElementById('blur-nsfw-checkbox');
+        const shouldBlur = blurNsfwCheckbox ? blurNsfwCheckbox.checked : true;
+        
+        // Apply blur to all NSFW model cards
+        const modelCards = document.querySelectorAll('.model-card');
+        modelCards.forEach(card => {
+            const isNsfw = card.dataset.nsfw === 'true';
+            if (isNsfw && shouldBlur) {
+                card.classList.add('nsfw-blurred');
+            } else {
+                card.classList.remove('nsfw-blurred');
+            }
+        });
     }
 });

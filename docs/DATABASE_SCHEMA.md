@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS models (
     civitai_download_url TEXT,
     civitai_trained_words TEXT,
     civitai_file_size_kb INTEGER,
+    civitai_nsfw BOOLEAN DEFAULT FALSE,
+    civitai_blurhash TEXT,
     metadata_status TEXT NOT NULL DEFAULT 'incomplete' CHECK (metadata_status IN ('complete', 'partial', 'incomplete', 'none', 'error')),
     metadata_source TEXT DEFAULT 'none' CHECK (metadata_source IN ('forge', 'civitai', 'embedded', 'none')),
     has_embedded_metadata BOOLEAN DEFAULT FALSE,
@@ -147,6 +149,8 @@ CREATE INDEX IF NOT EXISTS idx_models_hashes ON models (hash_autov2, hash_sha256
 - `civitai_download_url`: Direct download URL from Civitai
 - `civitai_trained_words`: Trigger words for the model (JSON array or comma-separated string)
 - `civitai_file_size_kb`: File size in kilobytes
+- `civitai_nsfw`: Boolean flag indicating if the model contains NSFW content (from Civitai API)
+- `civitai_blurhash`: Blurhash string for preview image blur effect (from Civitai API)
 - `metadata_status`: Status of metadata enrichment (complete, partial, incomplete, none, error)
 - `metadata_source`: Source of metadata (forge, civitai, embedded, none)
 - `has_embedded_metadata`: Boolean flag for embedded metadata presence in safetensors files
@@ -276,6 +280,7 @@ StableQueue includes an automated database migration system to handle schema upd
 - **Schema Validation**: Validates column existence before attempting ALTER TABLE operations
 
 ### Recent Migrations
+- **v2.2.0**: Added `civitai_nsfw` and `civitai_blurhash` columns to models table for NSFW content filtering and blur effects
 - **v2.1.0**: Added `preview_path` and `preview_url` columns to models table for preview image support
 - **v2.0.0**: Enhanced metadata_status enum to include 'partial', 'none' states and added `metadata_source`, `has_embedded_metadata` columns
 
