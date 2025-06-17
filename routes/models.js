@@ -947,7 +947,10 @@ router.post('/models/scan', async (req, res) => {
                 }
                 
                 // Step 4.6: Fetch Civitai metadata if we have AutoV2 hash but missing metadata
-                if (modelData.hash_autov2 && (!modelData.civitai_model_name || !modelData.metadata_source || modelData.metadata_source === 'none')) {
+                // Skip if already marked as 'none' (404 from previous scan)
+                if (modelData.hash_autov2 && 
+                    (!modelData.civitai_model_name || !modelData.metadata_source || modelData.metadata_source === 'none') &&
+                    modelData.civitai_model_name !== 'none') {
                     try {
                         console.log(`[ModelScan] Fetching Civitai metadata for ${model.filename} using AutoV2 hash ${modelData.hash_autov2}`);
                         
@@ -1005,57 +1008,118 @@ router.post('/models/scan', async (req, res) => {
                         }
                     } catch (metadataError) {
                         console.warn(`[ModelScan] Failed to fetch Civitai metadata for ${model.filename}:`, metadataError.message);
+                        
+                        // If 404 error, mark Civitai-specific fields as 'none' to prevent future API calls
+                        if (metadataError.message.includes('404') || (metadataError.response && metadataError.response.status === 404)) {
+                            console.log(`[ModelScan] Model ${model.filename} not found on Civitai (404) - marking Civitai fields as 'none'`);
+                            
+                            // Only set to 'none' if field is currently null (don't overwrite existing data)
+                            if (!modelData.civitai_id) modelData.civitai_id = 'none';
+                            if (!modelData.civitai_version_id) modelData.civitai_version_id = 'none';
+                            if (!modelData.civitai_model_name) modelData.civitai_model_name = 'none';
+                            if (!modelData.civitai_model_base) modelData.civitai_model_base = 'none';
+                            if (!modelData.civitai_model_type) modelData.civitai_model_type = 'none';
+                            if (!modelData.civitai_model_version_name) modelData.civitai_model_version_name = 'none';
+                            if (!modelData.civitai_model_version_desc) modelData.civitai_model_version_desc = 'none';
+                            if (!modelData.civitai_model_version_date) modelData.civitai_model_version_date = 'none';
+                            if (!modelData.civitai_download_url) modelData.civitai_download_url = 'none';
+                            if (!modelData.civitai_trained_words) modelData.civitai_trained_words = 'none';
+                            if (!modelData.civitai_blurhash) modelData.civitai_blurhash = 'none';
+                            // Note: civitai_nsfw is boolean, leave as false for 404s
+                            
+                            // Mark metadata as checked but not found
+                            if (!modelData.metadata_source || modelData.metadata_source === 'none') {
+                                modelData.metadata_source = 'none';
+                                modelData.metadata_status = 'none';
+                            }
+                        }
                     }
                 }
                 
                 // Step 4.75: Try to download preview image if we have a hash but no local preview
-                if (!modelData.preview_path && modelData.hash_autov2) {
+                // Skip if we already know model isn't on Civitai (marked as 'none' from 404)
+                if (!modelData.preview_path && modelData.hash_autov2 && modelData.civitai_model_name !== 'none') {
                     const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
                     const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
                     const autoV2Hash = modelData.hash_autov2;
                     
+                    // Double-check if preview file exists before making API call
                     try {
-                        
-                        console.log(`[ModelScan] Attempting to download preview for ${model.filename} using AutoV2 hash ${autoV2Hash}`);
-                        
-                        // Use Civitai hash-based lookup
-                        const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${autoV2Hash}`);
-                        const modelVersion = hashResponse.data;
-                        
-                        if (modelVersion && modelVersion.images && modelVersion.images.length > 0) {
-                            // Download preview image
-                            const previewUrl = modelVersion.images[0].url;
-                            console.log(`[ModelScan] Downloading preview image from: ${previewUrl}`);
+                        await fs.access(previewPath);
+                        // Preview file exists, use it
+                        modelData.preview_path = previewPath;
+                        modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                        console.log(`[ModelScan] Found existing preview image: ${previewPath}`);
+                    } catch (accessError) {
+                        // Preview doesn't exist, try to download from Civitai
+                        try {
+                            console.log(`[ModelScan] Attempting to download preview for ${model.filename} using AutoV2 hash ${autoV2Hash}`);
                             
-                            // Download the image
-                            const imageResponse = await rateLimitedCivitaiRequest(previewUrl, { responseType: 'arraybuffer' });
-                            const imageData = imageResponse.data;
+                            // Use Civitai hash-based lookup
+                            const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${autoV2Hash}`);
+                            const modelVersion = hashResponse.data;
                             
-                            // Save as *.preview.jpeg (exact format per Rule #1)
-                            await fs.writeFile(previewPath, imageData);
-                            console.log(`[ModelScan] Downloaded preview image to ${previewPath}`);
-                            
-                            modelData.preview_path = previewPath;
-                            modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                        } else {
-                            console.log(`[ModelScan] No preview images available for hash ${autoV2Hash}`);
-                        }
-                    } catch (downloadError) {
-                        console.warn(`[ModelScan] Failed to download preview for ${model.filename} using hash ${modelData.hash_autov2}:`, downloadError.message);
-                        
-                        // Generate placeholder image for 404 errors
-                        if (downloadError.message.includes('404')) {
-                            try {
-                                console.log(`[ModelScan] Generating placeholder preview for ${model.filename}`);
-                                await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                            if (modelVersion && modelVersion.images && modelVersion.images.length > 0) {
+                                // Download preview image
+                                const previewUrl = modelVersion.images[0].url;
+                                console.log(`[ModelScan] Downloading preview image from: ${previewUrl}`);
+                                
+                                // Download the image
+                                const imageResponse = await rateLimitedCivitaiRequest(previewUrl, { responseType: 'arraybuffer' });
+                                const imageData = imageResponse.data;
+                                
+                                // Save as *.preview.jpeg (exact format per Rule #1)
+                                await fs.writeFile(previewPath, imageData);
+                                console.log(`[ModelScan] Downloaded preview image to ${previewPath}`);
                                 
                                 modelData.preview_path = previewPath;
                                 modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                                console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
-                            } catch (placeholderError) {
-                                console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
+                            } else {
+                                console.log(`[ModelScan] No preview images available for hash ${autoV2Hash} - generating placeholder`);
+                                // Generate placeholder when no images are available on Civitai
+                                try {
+                                    await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                                    
+                                    modelData.preview_path = previewPath;
+                                    modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                                    console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
+                                } catch (placeholderError) {
+                                    console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
+                                }
+                            }
+                        } catch (downloadError) {
+                            console.warn(`[ModelScan] Failed to download preview for ${model.filename} using hash ${modelData.hash_autov2}:`, downloadError.message);
+                            
+                            // Generate placeholder image for 404 errors only (model not found on Civitai)
+                            // Other errors (network, rate limits) should allow retry on next scan
+                            if (downloadError.message.includes('404') || (downloadError.response && downloadError.response.status === 404)) {
+                                try {
+                                    console.log(`[ModelScan] Generating placeholder preview for ${model.filename} (404 - not found on Civitai)`);
+                                    await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                                    
+                                    modelData.preview_path = previewPath;
+                                    modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                                    console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
+                                } catch (placeholderError) {
+                                    console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
+                                }
                             }
                         }
+                    }
+                } else if (!modelData.preview_path && modelData.hash_autov2 && modelData.civitai_model_name === 'none') {
+                    // Model is known to not exist on Civitai, generate placeholder
+                    const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
+                    const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                    
+                    try {
+                        console.log(`[ModelScan] Model ${model.filename} not on Civitai - generating placeholder preview`);
+                        await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                        
+                        modelData.preview_path = previewPath;
+                        modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                        console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
+                    } catch (placeholderError) {
+                        console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
                     }
                 } else if (!modelData.preview_path) {
                     console.log(`[ModelScan] No AutoV2 hash for ${model.filename} - skipping preview download`);
@@ -1700,34 +1764,34 @@ router.post('/models/:id/fetch-from-civitai', async (req, res) => {
             
             if (previewImage.url) {
                 try {
-                    // Construct preview save path
+                    // Construct preview save path (use .jpeg for consistency with scanning logic)
                     const modelDir = path.join(existingModel.local_path);
                     const baseName = existingModel.filename.substring(0, existingModel.filename.lastIndexOf('.'));
-                    const previewPath = path.join(modelDir, `${baseName}.preview.png`);
+                    const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
                     
-                    // Check if preview already exists
-                    const previewExists = fs.existsSync ? fs.existsSync(previewPath) : false;
+                    // Check if preview already exists (use async fs.access for consistency)
+                    let previewExists = false;
+                    try {
+                        await fs.access(previewPath);
+                        previewExists = true;
+                    } catch (accessError) {
+                        previewExists = false;
+                    }
                     
                     if (!previewExists) {
                         console.log(`[Models] Downloading preview image from: ${previewImage.url}`);
                         
                         // Download the image
                         const imageResponse = await rateLimitedCivitaiRequest(previewImage.url, {
-                            responseType: 'stream'
+                            responseType: 'arraybuffer'
                         });
                         
                         if (imageResponse && imageResponse.data) {
                             // Ensure directory exists
-                            await fsp.mkdir(modelDir, { recursive: true });
+                            await fs.mkdir(modelDir, { recursive: true });
                             
-                            // Save the image
-                            const writeStream = fsSync.createWriteStream(previewPath);
-                            imageResponse.data.pipe(writeStream);
-                            
-                            await new Promise((resolve, reject) => {
-                                writeStream.on('finish', resolve);
-                                writeStream.on('error', reject);
-                            });
+                            // Save the image as .jpeg
+                            await fs.writeFile(previewPath, imageResponse.data);
                             
                             previewDownloaded = true;
                             console.log(`[Models] Preview image saved to: ${previewPath}`);
@@ -1737,8 +1801,47 @@ router.post('/models/:id/fetch-from-civitai', async (req, res) => {
                     }
                 } catch (imageError) {
                     console.error(`[Models] Failed to download preview image:`, imageError);
-                    // Don't fail the whole request for image download errors
+                    
+                    // Generate placeholder image for 404 errors only (model not found on Civitai)
+                    // Other errors (network, rate limits) should allow retry on next fetch
+                    if (imageError.message.includes('404') || (imageError.response && imageError.response.status === 404)) {
+                        try {
+                            const modelDir = path.join(existingModel.local_path);
+                            const baseName = existingModel.filename.substring(0, existingModel.filename.lastIndexOf('.'));
+                            const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                            
+                            console.log(`[Models] Generating placeholder preview for ${existingModel.filename} (404 - not found on Civitai)`);
+                            await generatePlaceholderPreview(existingModel.filename, existingModel.type, previewPath);
+                            console.log(`[Models] Generated placeholder preview: ${previewPath}`);
+                        } catch (placeholderError) {
+                            console.error(`[Models] Failed to generate placeholder for ${existingModel.filename}:`, placeholderError.message);
+                        }
+                    }
                 }
+            }
+        } else {
+            // No images available on Civitai - generate placeholder
+            try {
+                const modelDir = path.join(existingModel.local_path);
+                const baseName = existingModel.filename.substring(0, existingModel.filename.lastIndexOf('.'));
+                const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                
+                // Check if preview already exists
+                let previewExists = false;
+                try {
+                    await fs.access(previewPath);
+                    previewExists = true;
+                } catch (accessError) {
+                    previewExists = false;
+                }
+                
+                if (!previewExists) {
+                    console.log(`[Models] No preview images available on Civitai for ${existingModel.filename} - generating placeholder`);
+                    await generatePlaceholderPreview(existingModel.filename, existingModel.type, previewPath);
+                    console.log(`[Models] Generated placeholder preview: ${previewPath}`);
+                }
+            } catch (placeholderError) {
+                console.error(`[Models] Failed to generate placeholder for ${existingModel.filename}:`, placeholderError.message);
             }
         }
         
