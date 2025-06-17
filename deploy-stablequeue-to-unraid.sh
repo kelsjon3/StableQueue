@@ -157,6 +157,11 @@ EOF_COMPOSE
 
     echo "Cleaning up .tar file on Unraid..."
     rm "${TAR_FILENAME}"
+    
+    echo "Cleaning up orphaned Docker images to free up space..."
+    docker image prune -f
+    echo "Docker cleanup completed."
+    
     echo "--- Unraid script finished ---"
 EOF_UNRAID_SCRIPT
 if [ $? -ne 0 ]; then echo -e "${RED}Unraid deployment script failed! Aborting.${NC}"; rm -f "${TAR_FILENAME}"; exit 1; fi

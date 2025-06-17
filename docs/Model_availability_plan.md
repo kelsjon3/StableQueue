@@ -46,6 +46,55 @@
 - [ ] **Job queue UI model availability indicators**
 - [ ] **Cross-server model copying capabilities**
 
+## 🎯 **REVISED MODEL SCANNING WORKFLOW (Hash Required)**
+
+### **Complete Processing Flow for Each Model File:**
+
+```javascript
+1. Scan for file
+
+2. Extract metadata (Forge JSON > Civitai JSON > Embedded)
+   If no hash found in metadata:
+   → Calculate AutoV2 hash (mandatory)
+   → Calculate SHA256 hash (for verification)
+
+3. Check database for hash
+
+4. If hash matches existing entry:
+   → Same path: Update null fields with new metadata
+   → Different path: Skip as duplicate, log for report
+   
+5. If no duplicate or new model:
+   → Check for missing Civitai fields  
+   → Call Civitai API using AutoV2 hash if needed
+   
+6. Check for local preview image
+
+7. If no preview:
+   → Download from Civitai using AutoV2 hash
+   → Save as modelname.preview.jpeg
+
+8. Write/update database record
+```
+
+### **Key Principles:**
+- **Hash is mandatory** - every model must have an AutoV2 hash before proceeding
+- **Database lookup by hash** - most reliable duplicate detection method
+- **Path verification** - same hash + different path = duplicate (skip)
+- **Metadata preservation** - only update null fields, maintain data quality
+- **Civitai integration** - use AutoV2 hash for all API lookups
+- **Preview consistency** - only `*.preview.jpeg` format supported
+
+### **Performance Considerations:**
+- Hash calculation can be time-intensive but is essential for system reliability
+- Progress reporting shows estimated completion times
+- Batch processing with status updates every 10 models
+- Hash caching for unchanged files (same size + modification time)
+
+This workflow ensures bulletproof duplicate detection and complete Civitai integration at the cost of thorough initial processing time.
+
+---
+
 ## Current Architecture (PRODUCTION)
 
 ### Database Schema (Fully Implemented)
@@ -230,7 +279,7 @@ Based on the current implementation, here are the specific steps to complete the
 
 ## What Happens When the User Clicks 'Scan for New Models'
 
-The model scanning functionality is a comprehensive process that discovers, analyzes, and catalogs all AI models in the configured directories. This section details the complete workflow from user action to database update.
+The model scanning functionality discovers and catalogs all AI models in the configured directories using a simplified, reliable approach. This section details the streamlined workflow from user action to database update.
 
 ### 🎯 User Interface Flow
 
@@ -250,75 +299,32 @@ The model scanning functionality is a comprehensive process that discovers, anal
 - Refreshes the models display to show newly discovered models
 - Re-enables the scan button
 
-### 🔍 Backend Processing Workflow
+### 🧠 Backend Processing Workflow
 
-#### **Phase 1: Directory Discovery**
-```javascript
-// Configuration - single MODEL_PATH only
-const modelPath = process.env.MODEL_PATH;
+**Goal:**  
+Scan `MODEL_PATH` for model files and related metadata. Ensure every discovered model has a database entry. Then fill in any missing fields using prioritized metadata sources.
 
-// Recursive scanning of all subdirectories
-const allModels = await scanModelDirectory(modelPath, MODEL_EXTENSIONS, modelPath);
-```
+---
 
-**What happens**:
-- Scans the configured `MODEL_PATH` recursively
-- Discovers all files with extensions: `.safetensors`, `.pt`, `.ckpt`
-- Builds file inventory with relative paths from root directory
-- Detects associated preview images (`{modelname}.preview.jpeg`)
+#### ✅ Processing Rules
 
-#### **Phase 2: Metadata Extraction Hierarchy**
+#### **Phase 1: File Discovery**
+Scan `MODEL_PATH` recursively for:
+- **Model files**: `.safetensors`, `.pt`, `.ckpt`
+- **JSON metadata files**: All `*.json` files (regardless of naming convention)
+- **Preview images**: Files matching **exactly** `*.preview.jpeg` (ignore all other preview formats)
 
-**For each discovered model file, follows strict priority order**:
+#### **Phase 2: Model Detection & Initialization**
+For **every model file found**:
+- **Always** create a database entry if one doesn't already exist
+- **Never** infer metadata from filename or file path
+- Populate minimum required fields:
+  - `filename`: Base filename of the model
+  - `local_path`: Full directory path containing the model
+- All metadata fields can remain `null` at this stage
 
-1. **🥇 Forge-style JSON** (`{modelname}.json`) - **HIGHEST PRIORITY**
-   ```javascript
-   // Must contain actual model metadata
-   if (parsedJson.modelId || parsedJson.model?.id || parsedJson.name || parsedJson.description) {
-       jsonMetadata = parsedJson;
-       jsonSource = 'forge';
-   }
-   ```
-
-2. **🥈 Civitai-style JSON** (`{modelname}.civitai.json`) - **MEDIUM PRIORITY**
-   ```javascript
-   if (validateMetadataCompleteness(parsedJson)) {
-       jsonMetadata = parsedJson;
-       jsonSource = 'civitai';
-   }
-   ```
-
-3. **🥉 Embedded Metadata** (from safetensors file) - **LOWEST PRIORITY**
-   ```javascript
-   embeddedMetadata = await readModelFileMetadata(modelFilePath);
-   // Uses custom safetensors parser for embedded data
-   ```
-
-#### **Phase 3: Data Processing & Enrichment**
-
-**Creates comprehensive model data object**:
-- **26+ database fields** populated from metadata sources
-- **Model type detection** from metadata or architecture patterns
-- **Hash extraction** from existing metadata (AutoV2, SHA256)
-- **Complex value conversion** to SQLite-safe strings
-
-**Example field mapping**:
-```javascript
-modelData = {
-    name: model.filename,
-    type: extractedType, // 'checkpoint', 'lora', or null
-    hash_autov2: metadata.hash_autov2 || metadata.AutoV2,
-    civitai_id: metadata.modelId || metadata.model?.id,
-    civitai_trained_words: getEnhancedActivationText(metadata),
-    metadata_source: jsonSource || 'embedded' || 'none',
-    has_embedded_metadata: !!embeddedMetadata
-    // ... 20+ additional fields
-};
-```
-
-#### **Phase 4: Duplicate Detection & Resolution**
-
-**Hash-only matching strategy**:
+#### **Phase 3: Duplicate Detection (Hash-Only)**
+**Critical**: Duplicates are detected **ONLY** by hash comparison:
 ```javascript
 // Check for existing model by hash only (most reliable)
 if (modelData.hash_autov2) {
@@ -326,85 +332,76 @@ if (modelData.hash_autov2) {
 } else if (modelData.hash_sha256) {
     existingModel = modelDB.findModelsByHash(modelData.hash_sha256, 'sha256')[0];
 }
+// If no hash available yet → treat as new model until hash can be calculated
 ```
 
-#### **Phase 5: Hash Calculation (Optional)**
+**No fallback to filename/path matching** - hash comparison is the only reliable duplicate detection method.
 
-**If "Calculate Hashes" is enabled**:
-```javascript
-// Calculate AutoV2 and/or SHA256 hash if either column is null
-if (calculateHashes && (!modelData.hash_autov2 || !modelData.hash_sha256)) {
-    const sizeCheck = checkFileSizeForHashing(fileStats.size);
-    if (sizeCheck.isAllowed) {
-        const calculatedHash = await calculateFileHash(fullModelPath);
-        modelData.hash_autov2 = calculatedHash.autov2;
-        modelData.hash_sha256 = calculatedHash.sha256;
-    }
-}
-```
+#### **Phase 4: Metadata Population (Priority Order)**
+**Only populate database fields that are currently `null`** - never overwrite existing values.
 
-**Safety mechanisms**:
-- **File size limits** to prevent system overload
-- **Time estimates** shown to user for large files
-- **Error handling** for corrupted or inaccessible files
-- **Statistics tracking**: calculated, skipped, errors
+1. **🥇 Forge JSON Metadata** (Highest Priority)
+   - Scan all `*.json` files in the model directory
+   - If JSON contents match Forge format → apply Forge metadata to `null` fields
 
-#### **Phase 6: Database Operations**
+2. **🥈 Civitai JSON Metadata** (Medium Priority)  
+   - If JSON contents match Civitai format → apply to remaining `null` fields
 
-##### **For Existing Models**:
-**Enhanced field-by-field comparison**:
-```javascript
-const allFieldsToCheck = [
-    'name', 'type', 'hash_autov2', 'hash_sha256',
-    'civitai_id', 'civitai_version_id', 'civitai_model_name', // ... 24+ fields
-];
+3. **🥉 Embedded File Metadata** (Low Priority)
+   - Extract metadata from model file headers (e.g., `safetensors` metadata)
+   - Apply to remaining `null` fields
 
-for (const field of allFieldsToCheck) {
-    const isExistingNull = (existingValue === null || existingValue === undefined || existingValue === '');
-    const hasNewValue = (newValue !== null && newValue !== undefined && newValue !== '');
-    
-    if (isExistingNull && hasNewValue) {
-        hasNewInfo = true;
-        fieldsWithNewInfo.push(field);
-    }
-}
-```
+4. **🔄 Civitai API Lookup** (Fallback)
+   - Query Civitai API for any unresolved values
+   - Populate remaining `null` fields if possible
 
-**Update criteria**:
-- ✅ **Only factual data** from metadata sources
-- ✅ **No inferring or guessing** of values
-- ✅ **Null field population** with actual metadata
-- ✅ **Simple null checking** - no complex status management
+#### **Phase 5: Preview Image Handling**
+- Check for local `*.preview.jpeg` file
+- If missing and Civitai metadata available:
+  - Download and store preview image from Civitai API
 
-##### **For New Models**:
-- **Complete database record** creation with all available metadata
-- **Server availability tracking** update
-- **Model type classification** (checkpoint/lora)
+#### **Phase 6: Hash Generation (Optional)**
+**If user enabled "Calculate Hashes"**:
+- If `hash_autov2` is `null` → generate and store AutoV2 hash
+- If `hash_sha256` is `null` → generate and store SHA256 hash
+- Apply file size limits and time estimates for large files
+
+#### **Phase 7: Database Operations**
+- **For new models**: Insert complete database record
+- **For existing models** (identified by hash): Update only `null` fields with new metadata
+- **Idempotent process**: Safe to re-run without side effects
+
+---
+
+### 🔁 Key Principles
+
+- **Never** infer meaning from filenames or paths
+- **Always** prefer actual file contents for determining metadata format
+- **Only update `null` fields** - preserve existing data
+- **Hash-only duplicate detection** - no filename/path fallback
+- **Idempotent operation** - safe to re-run multiple times
+- **Content-based metadata detection** - examine JSON contents to determine format
 
 ### 📊 Statistics & Reporting
 
-**Tracks comprehensive metrics**:
+**Simplified tracking metrics**:
 ```javascript
 stats = {
-    total: allModels.length,           // Total files discovered
-    added: 0,                          // New models added
-    updated: 0,                        // Existing models updated
-    skipped: 0,                        // No new information
-    errors: 0,                         // Processing failures
-    checkpoints: 0,                    // Checkpoint models found
-    loras: 0,                          // LoRA models found
-    hashesCalculated: 0,               // Hashes computed
+    total: allModels.length,           // Total model files discovered
+    added: 0,                          // New database entries created
+    updated: 0,                        // Existing entries with new metadata
+    hashesCalculated: 0,               // Hash generation count
     hashesSkipped: 0,                  // Files too large for hashing
-    hashErrors: 0                      // Hash calculation failures
+    errors: 0                          // Processing failures
 };
 ```
 
 **Example success message**:
 ```
-Scan complete! Found 847 models (623 checkpoints, 224 LoRAs)
-- Added: 12 new models
-- Updated: 45 models with new metadata
-- Calculated: 8 hashes
+Scan complete! Found 247 model files
+- Added: 12 new models to database
+- Updated: 8 models with new metadata  
+- Calculated: 5 hashes
 ```
 
 ### 🔧 Configuration Requirements
@@ -412,38 +409,24 @@ Scan complete! Found 847 models (623 checkpoints, 224 LoRAs)
 #### **Environment Variables**
 - `MODEL_PATH`: Single root directory to scan recursively
 - `CONFIG_DATA_PATH`: Database storage location
+- `CIVITAI_API_KEY`: Optional API key for metadata enrichment
 
 #### **File System Requirements**
 - **Read access**: Model directories and files
-- **Write access**: Database updates and preview downloads
+- **Write access**: Database updates and preview image downloads
 - **Directory structure**: Any organization supported (recursive scanning)
-
-#### **Optional Integrations**
-- `CIVITAI_API_KEY`: For future metadata enrichment features
-- Preview image storage: For gallery display
 
 ### 🐛 Troubleshooting & Debugging
 
-**Common scan results**:
-- **"Models skipped"**: Existing models with no new metadata to add
+**Expected scan behaviors**:
+- **"Added new models"**: Model files without existing database entries
+- **"Updated models"**: Existing models (by hash) with new metadata discovered
 - **"Hash calculation skipped"**: Files exceeding size limits (>15GB default)
-- **"Metadata errors"**: Corrupted or invalid JSON/safetensors files
-- **"No models found"**: Check `MODEL_PATH` configuration and permissions
+- **"No models found"**: Check `MODEL_PATH` configuration and file permissions
 
-**Enhanced debugging** (current implementation includes comprehensive logging):
-```
-[ModelScan] ======= COMPREHENSIVE DEBUG FOR model.safetensors =======
-[ModelScan] EXISTING MODEL KEY FIELDS:
-  type: "lora"
-  hash_autov2: "abc123def4"
-  metadata_source: "embedded"
-[ModelScan] NEW MODEL DATA KEY FIELDS:
-  type: "lora"
-  hash_autov2: "abc123def4"
-  metadata_source: "civitai"
-[ModelScan] FIELD-BY-FIELD COMPARISON:
-  civitai_trained_words: existing="null" → new="anime, portrait" (hasNew=true)
-[ModelScan] ✓ Updated model: model.safetensors (1 fields updated)
-```
+**Important Notes**:
+- **Duplicate detection is hash-only** - same content = same hash, regardless of filename/location
+- **No false positives** from filename collisions in different directories
+- **No missed duplicates** when models are moved or renamed
 
-This comprehensive scanning process ensures that StableQueue maintains an accurate, up-to-date inventory of all available AI models with rich metadata for optimal job matching and availability tracking. 
+This simplified scanning process ensures reliable model discovery and metadata population while maintaining data integrity through idempotent operations and hash-based duplicate detection. 

@@ -349,6 +349,28 @@ function findModel(civitaiVersionId, type = null) {
 }
 
 /**
+ * Find a model using filename and local_path
+ * @param {string} filename - Model filename
+ * @param {string} localPath - Model local path
+ * @returns {Object|null} The matched model or null if not found
+ */
+function findModelByPath(filename, localPath) {
+    try {
+        if (!filename || !localPath) {
+            return null;
+        }
+
+        const query = 'SELECT * FROM models WHERE filename = ? AND local_path = ? LIMIT 1';
+        const result = db.prepare(query).get(filename, localPath);
+        
+        return result || null;
+    } catch (error) {
+        console.error('[ModelDB] Error finding model by path:', error);
+        return null;
+    }
+}
+
+/**
  * Get all models from the database
  * @param {string} [type] - Optional type filter ('checkpoint' or 'lora')
  * @returns {Array} List of models
@@ -716,12 +738,30 @@ function findModelsByHash(hash, hashType = 'autov2') {
     }
 }
 
+/**
+ * Delete a model from the database
+ * @param {number} modelId - ID of the model to delete
+ * @returns {boolean} Success status
+ */
+function deleteModel(modelId) {
+    try {
+        const stmt = db.prepare('DELETE FROM models WHERE id = ?');
+        const result = stmt.run(modelId);
+        console.log(`[ModelDB] Deleted model ID ${modelId} (affected rows: ${result.changes})`);
+        return result.changes > 0;
+    } catch (error) {
+        console.error('[ModelDB] Error deleting model:', error);
+        return false;
+    }
+}
+
 // Initialize the database on module load
 initializeDatabase();
 
 module.exports = {
     addOrUpdateModel,
     findModel,
+    findModelByPath,
     getAllModels,
     populateModelCache,
     importModelsFromForge,
@@ -734,5 +774,6 @@ module.exports = {
     findModelsByHash,
     resetDatabase,
     runMigrations,
-    isValidHash
+    isValidHash,
+    deleteModel
 }; 

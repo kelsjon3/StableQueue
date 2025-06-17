@@ -4,12 +4,20 @@ FROM node:22-slim
 # Set the working directory in the container
 WORKDIR /usr/src/app
 
-# Install build tools needed for native modules like better-sqlite3
+# Install build tools needed for native modules like better-sqlite3 and canvas
+# Canvas requires additional graphics libraries and pkg-config
 # And then clean up apt lists to keep image size smaller
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
+    pkg-config \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev \
+    libpixman-1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy package.json and package-lock.json (if available)

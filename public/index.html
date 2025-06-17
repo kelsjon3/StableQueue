@@ -291,6 +291,13 @@
                         Calculate hashes during scan (AutoV2, up to 15GB files, ~7.5min for large files)
                     </label>
                 </div>
+                <div class="search-row">
+                    <div class="search-container">
+                        <input type="text" id="model-search-input" placeholder="Search models by name, type, or metadata..." class="search-input">
+                        <button id="clear-search-btn" class="clear-search-btn" style="display: none;">&times;</button>
+                        <span id="search-results-count" class="search-results-count"></span>
+                    </div>
+                </div>
                 <div class="filter-row">
                     <div class="filter-group-left">
                         <label for="model-type-filter">Type:</label>

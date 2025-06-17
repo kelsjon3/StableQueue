@@ -3,15 +3,14 @@ const crypto = require('crypto');
 const path = require('path');
 
 /**
- * Calculate AutoV2 hash of a model file with optimized chunk size for large files
- * AutoV2 is the hash format used by Automatic1111, based on SHA256 but with specific handling for model files
+ * Calculate SHA256 hash of a file with optimized chunk size for large files
  * @param {string} filePath - Path to the file
  * @param {Function} [progressCallback] - Optional progress callback function(progress, eta)
- * @returns {Promise<string|null>} AutoV2 hash (10 characters) or null on error
+ * @returns {Promise<string|null>} Full SHA256 hash (64 characters) or null on error
  */
-async function calculateFileHash(filePath, progressCallback = null) {
+async function calculateSHA256Hash(filePath, progressCallback = null) {
     try {
-        console.log(`[HashCalculator] Starting AutoV2 calculation for ${path.basename(filePath)}`);
+        console.log(`[HashCalculator] Starting SHA256 calculation for ${path.basename(filePath)}`);
         const startTime = Date.now();
         
         const stats = await fs.stat(filePath);
@@ -20,10 +19,10 @@ async function calculateFileHash(filePath, progressCallback = null) {
         
         console.log(`[HashCalculator] File size: ${(fileSize / (1024 * 1024)).toFixed(1)} MB`);
         
-        // Check file size limit (15GB)
-        const MAX_FILE_SIZE = 15 * 1024 * 1024 * 1024; // 15GB
+        // Check file size limit (35GB)
+        const MAX_FILE_SIZE = 35 * 1024 * 1024 * 1024; // 35GB
         if (fileSize > MAX_FILE_SIZE) {
-            throw new Error(`File size (${fileSizeGB.toFixed(1)}GB) exceeds maximum limit of 15GB`);
+            throw new Error(`File size (${fileSizeGB.toFixed(1)}GB) exceeds maximum limit of 35GB`);
         }
         
         // Use larger chunks for better performance on large files
@@ -65,17 +64,70 @@ async function calculateFileHash(filePath, progressCallback = null) {
         
         // Get the full SHA256 hash
         const fullHash = hash.digest('hex');
-        
-        // AutoV2 is the first 10 characters of the SHA256 hash (lowercase)
-        const autoV2Hash = fullHash.substring(0, 10);
         const totalTime = (Date.now() - startTime) / 1000;
         
-        console.log(`[HashCalculator] AutoV2 calculated in ${totalTime.toFixed(1)}s: ${autoV2Hash}`);
+        console.log(`[HashCalculator] SHA256 calculated in ${totalTime.toFixed(1)}s: ${fullHash}`);
         
         // Final progress update
         if (progressCallback) {
             progressCallback(100, 0);
         }
+        
+        return fullHash;
+        
+    } catch (error) {
+        console.error(`[HashCalculator] Error calculating SHA256 for ${filePath}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Calculate AutoV2 hash of a model file using AUTOMATIC1111's specific algorithm
+ * AutoV2 is computed from a subset of the model file's binary content, not the whole file
+ * This is used for model identification in Stable Diffusion UIs and Civitai matching
+ * @param {string} filePath - Path to the file
+ * @param {Function} [progressCallback] - Optional progress callback function(progress, eta)
+ * @returns {Promise<string|null>} AutoV2 hash (10 characters) or null on error
+ */
+async function calculateAutoV2Hash(filePath, progressCallback = null) {
+    try {
+        console.log(`[HashCalculator] Starting AutoV2 calculation for ${path.basename(filePath)}`);
+        const startTime = Date.now();
+        
+        const stats = await fs.stat(filePath);
+        const fileSize = stats.size;
+        
+        // AutoV2 algorithm: Read specific chunks from the file for hashing
+        // This is based on AUTOMATIC1111's implementation
+        const hash = crypto.createHash('sha256');
+        const fileHandle = await fs.open(filePath, 'r');
+        
+        try {
+            // Read the first 0x100000 bytes (1MB) for AutoV2 calculation
+            const chunkSize = 0x100000; // 1MB
+            const buffer = Buffer.alloc(Math.min(chunkSize, fileSize));
+            
+            const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, 0);
+            
+            if (bytesRead > 0) {
+                hash.update(buffer.subarray(0, bytesRead));
+            }
+            
+            // Update progress if callback provided
+            if (progressCallback) {
+                progressCallback(100, 0);
+            }
+            
+        } finally {
+            await fileHandle.close();
+        }
+        
+        // Get the hash and take first 10 characters (AutoV2 format)
+        const fullHash = hash.digest('hex');
+        const autoV2Hash = fullHash.substring(0, 10);
+        const totalTime = (Date.now() - startTime) / 1000;
+        
+        console.log(`[HashCalculator] AutoV2 calculated in ${totalTime.toFixed(1)}s: ${autoV2Hash}`);
         
         return autoV2Hash;
         
@@ -83,6 +135,15 @@ async function calculateFileHash(filePath, progressCallback = null) {
         console.error(`[HashCalculator] Error calculating AutoV2 for ${filePath}:`, error);
         throw error;
     }
+}
+
+/**
+ * Legacy function name for backward compatibility
+ * @deprecated Use calculateAutoV2Hash instead
+ */
+async function calculateFileHash(filePath, progressCallback = null) {
+    console.warn('[HashCalculator] calculateFileHash is deprecated, use calculateAutoV2Hash instead');
+    return calculateAutoV2Hash(filePath, progressCallback);
 }
 
 /**
@@ -103,7 +164,7 @@ function getEstimatedHashTime(fileSizeBytes) {
  * @returns {Object} Result with isAllowed, reason, and sizeInfo
  */
 function checkFileSizeForHashing(fileSizeBytes) {
-    const MAX_FILE_SIZE = 15 * 1024 * 1024 * 1024; // 15GB
+    const MAX_FILE_SIZE = 35 * 1024 * 1024 * 1024; // 35GB
     const fileSizeGB = fileSizeBytes / (1024 * 1024 * 1024);
     const fileSizeMB = fileSizeBytes / (1024 * 1024);
     
@@ -117,7 +178,7 @@ function checkFileSizeForHashing(fileSizeBytes) {
     if (fileSizeBytes > MAX_FILE_SIZE) {
         return {
             isAllowed: false,
-            reason: `File size (${sizeDisplay}) exceeds maximum limit of 15GB`,
+            reason: `File size (${sizeDisplay}) exceeds maximum limit of 35GB`,
             sizeInfo: {
                 bytes: fileSizeBytes,
                 displaySize: sizeDisplay,
@@ -159,7 +220,9 @@ function formatDuration(seconds) {
 }
 
 module.exports = {
-    calculateFileHash,
+    calculateSHA256Hash,
+    calculateAutoV2Hash,
+    calculateFileHash, // Legacy - deprecated
     getEstimatedHashTime,
     checkFileSizeForHashing,
     formatDuration

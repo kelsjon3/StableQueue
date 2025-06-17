@@ -221,24 +221,15 @@ router.get('/models/:id/info', async (req, res) => {
             }
         }
         
-        // Try to find preview image
-        const previewOptions = [
-            path.join(fullDirectory, `${modelBasename}.preview.jpeg`),
-            path.join(fullDirectory, `${modelBasename}.preview.jpg`),
-            path.join(fullDirectory, `${modelBasename}.preview.png`),
-            path.join(fullDirectory, `${modelBasename}.preview.webp`),
-            path.join(fullDirectory, `${modelBasename}.png`),
-            path.join(fullDirectory, `${modelBasename}.jpg`),
-            path.join(fullDirectory, `${modelBasename}.jpeg`),
-            path.join(fullDirectory, `${modelBasename}.webp`)
-        ];
-        
-        let previewPath = null;
-        for (const option of previewOptions) {
-            if (fsSync.existsSync(option)) {
-                previewPath = option;
-                break;
+        // Try to find preview image - ONLY check *.preview.jpeg per Rule #1
+        const previewPath = path.join(fullDirectory, `${modelBasename}.preview.jpeg`);
+        let hasPreview = false;
+        try {
+            if (fsSync.existsSync(previewPath)) {
+                hasPreview = true;
             }
+        } catch (err) {
+            // Preview file doesn't exist
         }
         
         // Get file stats
@@ -259,8 +250,8 @@ router.get('/models/:id/info', async (req, res) => {
             size: stats.size,
             created: stats.birthtime,
             modified: stats.mtime,
-            has_preview: !!previewPath,
-            preview_url: previewPath ? `/api/v1/models/${encodeURIComponent(modelPath)}/preview?type=${type}` : null,
+            has_preview: hasPreview,
+            preview_url: hasPreview ? `/api/v1/models/${encodeURIComponent(modelPath)}/preview?type=${type}` : null,
             civitai_id: metadata.modelId || metadata.model?.id || metadata.id || null,
             civitai_url: getCivitaiUrlFromMetadata(metadata),
             metadata_path: metadataSource,
@@ -773,36 +764,53 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
     }
 });
 
+// Add these logging functions at the top of the scan endpoint
+
+function logScanPhase(phase, data = {}) {
+    console.log(`\n🔄 === SCAN PHASE: ${phase} ===`);
+    if (Object.keys(data).length > 0) {
+        console.log('Data:', data);
+    }
+}
+
+function logModelProcessing(model, step, result = {}) {
+    console.log(`\n📄 [${model.filename}] Step: ${step}`);
+    if (Object.keys(result).length > 0) {
+        console.log(`   Result:`, result);
+    }
+}
+
 /**
  * POST /api/v1/models/scan
  * Scans configured model directories for models and updates the database
  * Uses metadata from .civitai.json files or embedded metadata
  */
 router.post('/models/scan', async (req, res) => {
-    console.log('[Models] /api/v1/models/scan endpoint called');
+    logScanPhase('INITIALIZATION', { calculateHashes: req.body.calculateHashes });
+    
     try {
-        // Get scan options from request body
         const { calculateHashes = false } = req.body;
-        console.log(`[ModelScan] Options: calculateHashes=${calculateHashes}`);
         
-        // Log model count before scan
+        // Log database state before
         const preScanCount = modelDB.getAllModels().length;
-        console.log(`[ModelScan] Models in DB before scan: ${preScanCount}`);
+        logScanPhase('PRE_SCAN_STATE', { modelsInDB: preScanCount });
         
-        // Use single MODEL_PATH that searches recursively
         const modelPath = process.env.MODEL_PATH || process.env.CHECKPOINT_PATH;
-        
         if (!modelPath) {
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Model path not configured. Set MODEL_PATH environment variable or use legacy CHECKPOINT_PATH.' 
-            });
+            throw new Error('Model path not configured');
         }
-
-        console.log(`[ModelScan] Scanning models recursively from: ${modelPath}`);
         
-        // Scan single directory recursively and determine type by extension/location
+        logScanPhase('DIRECTORY_DISCOVERY', { modelPath });
         const allModels = await scanModelDirectory(modelPath, MODEL_EXTENSIONS, modelPath);
+        logScanPhase('DISCOVERY_COMPLETE', { 
+            totalFound: allModels.length,
+            sampleFiles: allModels.slice(0, 3).map(m => m.filename)
+        });
+        
+        // Process all models found
+        logScanPhase('PROCESSING_ALL_MODELS', { 
+            processingCount: allModels.length
+        });
         
         let stats = {
             total: allModels.length,
@@ -810,66 +818,51 @@ router.post('/models/scan', async (req, res) => {
             updated: 0,
             skipped: 0,
             errors: 0,
-            checkpoints: 0,
-            loras: 0,
             hashesCalculated: 0,
             hashesSkipped: 0,
             hashErrors: 0
         };
 
-        // Process all models in single unified loop
+        // Process models
         for (const model of allModels) {
             try {
+                // Step 1: Setup model data
                 const modelDir = path.join(modelPath, model.relativePath || '');
                 model.local_path = modelDir;
                 
-                // Read metadata using established hierarchy
+                // Step 2: Read metadata
                 const metadata = await readModelMetadata(model);
                 
-                // Determine metadata completeness and status
-                let metadataStatus = 'none';
-                if (metadata) {
-                    if (metadata._complete) {
-                        metadataStatus = 'complete';
-                    } else {
-                        metadataStatus = 'partial';
-                    }
-                }
-                
-                // Create base model data - always include filename and local_path
+                // Step 3: Create model data object
                 const modelData = {
                     name: model.filename,
-                    type: null, // Will be set later from metadata or remain null
+                    type: null,
                     local_path: modelDir,
                     filename: model.filename,
                     preview_path: model.previewPath || null,
                     preview_url: model.previewPath ? `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint` : null,
-                    metadata_status: metadataStatus,
+                    metadata_status: metadata ? (metadata._complete ? 'complete' : 'partial') : 'none',
                     metadata_source: metadata?._json_source || (metadata?._has_embedded ? 'embedded' : 'none'),
                     has_embedded_metadata: metadata?._has_embedded || false
                 };
                 
-                // Add metadata fields if available (don't infer anything)
-                if (metadata) {
-                    // Handle different hash field names from different sources
-                    const hash_autov2 = metadata.hash_autov2 || metadata.AutoV2 || null;
-                    const hash_sha256 = metadata.hash_sha256 || metadata.SHA256 || metadata.sha256 || null;
-                    
-                    // Extract type from explicit metadata sources
-                    if (metadata.type) {
-                        modelData.type = metadata.type;
-                    } else if (metadata['modelspec.architecture']) {
-                        // Extract type from modelspec.architecture (e.g., "flux-1-dev/lora" → "lora")
-                        const architecture = metadata['modelspec.architecture'];
-                        if (architecture && typeof architecture === 'string') {
-                            if (architecture.includes('/lora')) {
-                                modelData.type = 'lora';
-                            } else if (architecture.includes('/checkpoint') || architecture.includes('checkpoint')) {
-                                modelData.type = 'checkpoint';
-                            }
-                        }
+                // Step 3.5: Handle preview images (Phase 5 from plan)
+                if (!model.previewPath) {
+                    // Check for *.preview.jpeg files ONLY (per rule #1)
+                    const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
+                    const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                    try {
+                        await fs.access(previewPath);
+                        modelData.preview_path = previewPath;
+                        modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                    } catch (err) {
+                        // No local preview image found - will download later after hash determination
+                        modelData.preview_path = null;
                     }
-                    
+                }
+                
+                // Extract metadata fields if available
+                if (metadata) {
                     // Helper function to safely convert complex values to strings for SQLite
                     const toSafeValue = (value) => {
                         if (value === null || value === undefined) return null;
@@ -878,228 +871,383 @@ router.post('/models/scan', async (req, res) => {
                         return String(value);
                     };
                     
+                    // Handle different hash field names from different sources
+                    const hash_autov2 = metadata.hash_autov2 || metadata.AutoV2 || null;
+                    const hash_sha256 = metadata.hash_sha256 || metadata.SHA256 || metadata.sha256 || null;
+                    
+                    // Extract type from metadata (Priority Order per Rule #3)
+                    let extractedType = null;
+                    
+                    // Priority 1: Direct type field (Forge/Civitai JSON)
+                    if (metadata.type) {
+                        extractedType = metadata.type.toLowerCase();
+                    } else if (metadata.model?.type) {
+                        extractedType = metadata.model.type.toLowerCase();
+                    }
+                    // Priority 2: Civitai model type
+                    else if (metadata.civitai_model_type) {
+                        extractedType = metadata.civitai_model_type.toLowerCase();
+                    }
+                    // Priority 3: Embedded metadata architecture 
+                    else if (metadata['modelspec.architecture']) {
+                        const architecture = metadata['modelspec.architecture'];
+                        if (architecture && typeof architecture === 'string') {
+                            if (architecture.includes('/lora') || architecture.includes('lora')) {
+                                extractedType = 'lora';
+                            } else if (architecture.includes('/checkpoint') || architecture.includes('checkpoint')) {
+                                extractedType = 'checkpoint';
+                            }
+                        }
+                    }
+                    
+                    // Normalize type values
+                    if (extractedType) {
+                        if (extractedType.includes('lora') || extractedType === 'lora') {
+                            modelData.type = 'lora';
+                        } else if (extractedType.includes('checkpoint') || extractedType === 'checkpoint') {
+                            modelData.type = 'checkpoint';
+                        }
+                    }
+                    
+                    // Add all metadata fields (handle both Civitai and Forge formats)
                     Object.assign(modelData, {
-                        hash_autov2: hash_autov2 || null,
-                        hash_sha256: hash_sha256 || null,
+                        hash_autov2: hash_autov2,
+                        hash_sha256: hash_sha256,
                         civitai_id: toSafeValue(metadata.modelId || metadata.model?.id),
                         civitai_version_id: toSafeValue(metadata.modelVersionId || metadata.model?.modelVersionId),
                         civitai_model_name: toSafeValue(metadata.name || metadata.model?.name),
                         civitai_model_base: toSafeValue(metadata.baseModel || metadata.model?.baseModel || metadata['sd version']),
                         civitai_model_type: toSafeValue(metadata.type || metadata.model?.type),
                         civitai_model_version_name: toSafeValue(metadata.versionName || metadata.name),
-                        civitai_model_version_desc: toSafeValue(metadata.description || metadata.model?.description),
+                        civitai_model_version_desc: toSafeValue(metadata.description || metadata.model?.description || metadata.notes),
                         civitai_model_version_date: toSafeValue(metadata.createdAt || metadata.model?.createdAt),
                         civitai_download_url: toSafeValue(metadata.downloadUrl || metadata.model?.downloadUrl),
-                        civitai_trained_words: toSafeValue(getEnhancedActivationText(metadata)),
+                        civitai_trained_words: toSafeValue(getEnhancedActivationText(metadata) || metadata['activation text']),
                         civitai_file_size_kb: toSafeValue(metadata.fileSizeKB || metadata['preferred weight']),
-                        civitai_nsfw: metadata.model?.nsfw || metadata.nsfw || false,
-                        civitai_blurhash: null // Will be populated when images are processed
+                        civitai_nsfw: metadata.model?.nsfw || metadata.nsfw || false
                     });
                 }
                 
-                // Check for existing model by multiple criteria (proper duplicate detection)
+                // Step 4: Hash-only duplicate detection (per plan)
                 let existingModel = null;
+                let skipModel = false;
                 
-                // First try to find by hash (most reliable)
+                // First, check if model already exists in database by filename/path
+                const existingByPath = modelDB.findModelByPath(model.filename, model.local_path);
+                if (existingByPath && (existingByPath.hash_autov2 || existingByPath.hash_sha256)) {
+                    // Use existing model's hash for duplicate detection
+                    modelData.hash_autov2 = existingByPath.hash_autov2;
+                    modelData.hash_sha256 = existingByPath.hash_sha256;
+                    console.log(`[ModelScan] Using existing hash for ${model.filename}: ${existingByPath.hash_autov2 || existingByPath.hash_sha256}`);
+                }
+                
+                // Step 4.5: Calculate hashes if requested and missing (per revised workflow)
+                if (calculateHashes) {
+                    await calculateMissingHashes(modelData, model, stats);
+                }
+                
+                // Step 4.6: Fetch Civitai metadata if we have AutoV2 hash but missing metadata
+                if (modelData.hash_autov2 && (!modelData.civitai_model_name || !modelData.metadata_source || modelData.metadata_source === 'none')) {
+                    try {
+                        console.log(`[ModelScan] Fetching Civitai metadata for ${model.filename} using AutoV2 hash ${modelData.hash_autov2}`);
+                        
+                        const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${modelData.hash_autov2}`);
+                        const modelVersion = hashResponse.data;
+                        
+                        if (modelVersion) {
+                            console.log(`[ModelScan] Found Civitai metadata for ${model.filename}: ${modelVersion.model?.name || 'Unknown'}`);
+                            
+                            // Extract and store Civitai metadata (only update null fields per scanning rules)
+                            if (!modelData.civitai_id && (modelVersion.modelId || modelVersion.model?.id)) {
+                                modelData.civitai_id = modelVersion.modelId || modelVersion.model.id;
+                            }
+                            if (!modelData.civitai_version_id && modelVersion.id) {
+                                modelData.civitai_version_id = modelVersion.id;
+                            }
+                            if (!modelData.civitai_model_name && modelVersion.model?.name) {
+                                modelData.civitai_model_name = modelVersion.model.name;
+                            }
+                            if (!modelData.civitai_model_base && modelVersion.baseModel) {
+                                modelData.civitai_model_base = modelVersion.baseModel;
+                            }
+                            if (!modelData.civitai_model_type && modelVersion.model?.type) {
+                                modelData.civitai_model_type = modelVersion.model.type;
+                            }
+                            if (!modelData.civitai_model_version_name && modelVersion.name) {
+                                modelData.civitai_model_version_name = modelVersion.name;
+                            }
+                            if (!modelData.civitai_model_version_desc && modelVersion.description) {
+                                modelData.civitai_model_version_desc = modelVersion.description;
+                            }
+                            if (!modelData.civitai_model_version_date && modelVersion.createdAt) {
+                                modelData.civitai_model_version_date = modelVersion.createdAt;
+                            }
+                            if (!modelData.civitai_download_url && modelVersion.downloadUrl) {
+                                modelData.civitai_download_url = modelVersion.downloadUrl;
+                            }
+                            if (!modelData.civitai_trained_words && modelVersion.trainedWords) {
+                                modelData.civitai_trained_words = JSON.stringify(modelVersion.trainedWords);
+                            }
+                            if (!modelData.civitai_nsfw && modelVersion.model?.nsfw) {
+                                modelData.civitai_nsfw = modelVersion.model.nsfw;
+                            }
+                            if (!modelData.civitai_blurhash && modelVersion.images?.[0]?.hash) {
+                                modelData.civitai_blurhash = modelVersion.images[0].hash;
+                            }
+                            
+                            // Update metadata source if we got data from Civitai
+                            if (!modelData.metadata_source || modelData.metadata_source === 'none') {
+                                modelData.metadata_source = 'civitai';
+                                modelData.metadata_status = 'complete';
+                            }
+                        } else {
+                            console.log(`[ModelScan] No Civitai metadata found for hash ${modelData.hash_autov2}`);
+                        }
+                    } catch (metadataError) {
+                        console.warn(`[ModelScan] Failed to fetch Civitai metadata for ${model.filename}:`, metadataError.message);
+                    }
+                }
+                
+                // Step 4.75: Try to download preview image if we have a hash but no local preview
+                if (!modelData.preview_path && modelData.hash_autov2) {
+                    const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
+                    const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                    const autoV2Hash = modelData.hash_autov2;
+                    
+                    try {
+                        
+                        console.log(`[ModelScan] Attempting to download preview for ${model.filename} using AutoV2 hash ${autoV2Hash}`);
+                        
+                        // Use Civitai hash-based lookup
+                        const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${autoV2Hash}`);
+                        const modelVersion = hashResponse.data;
+                        
+                        if (modelVersion && modelVersion.images && modelVersion.images.length > 0) {
+                            // Download preview image
+                            const previewUrl = modelVersion.images[0].url;
+                            console.log(`[ModelScan] Downloading preview image from: ${previewUrl}`);
+                            
+                            // Download the image
+                            const imageResponse = await rateLimitedCivitaiRequest(previewUrl, { responseType: 'arraybuffer' });
+                            const imageData = imageResponse.data;
+                            
+                            // Save as *.preview.jpeg (exact format per Rule #1)
+                            await fs.writeFile(previewPath, imageData);
+                            console.log(`[ModelScan] Downloaded preview image to ${previewPath}`);
+                            
+                            modelData.preview_path = previewPath;
+                            modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                        } else {
+                            console.log(`[ModelScan] No preview images available for hash ${autoV2Hash}`);
+                        }
+                    } catch (downloadError) {
+                        console.warn(`[ModelScan] Failed to download preview for ${model.filename} using hash ${modelData.hash_autov2}:`, downloadError.message);
+                        
+                        // Generate placeholder image for 404 errors
+                        if (downloadError.message.includes('404')) {
+                            try {
+                                console.log(`[ModelScan] Generating placeholder preview for ${model.filename}`);
+                                await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                                
+                                modelData.preview_path = previewPath;
+                                modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                                console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
+                            } catch (placeholderError) {
+                                console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
+                            }
+                        }
+                    }
+                } else if (!modelData.preview_path) {
+                    console.log(`[ModelScan] No AutoV2 hash for ${model.filename} - skipping preview download`);
+                }
+                
+                // Now check for duplicates using hash (hash-only detection)
+                // Per scanning rules: same hash + same path = update, same hash + different path = skip
                 if (modelData.hash_autov2) {
                     const hashMatches = modelDB.findModelsByHash(modelData.hash_autov2, 'autov2');
                     if (hashMatches.length > 0) {
-                        existingModel = hashMatches[0];
+                        const hashMatch = hashMatches[0];
+                        // Check if it's the same path (update) or different path (skip)
+                        if (hashMatch.filename === model.filename && hashMatch.local_path === model.local_path) {
+                            // Same path: Update null fields with new metadata (per scanning rules)
+                            existingModel = hashMatch;
+                            skipModel = false; // Don't skip - we want to update
+                        } else {
+                            // Different path: Skip as duplicate (per scanning rules)
+                            existingModel = hashMatch;
+                            skipModel = true;
+                        }
                     }
                 } else if (modelData.hash_sha256) {
                     const hashMatches = modelDB.findModelsByHash(modelData.hash_sha256, 'sha256');
                     if (hashMatches.length > 0) {
-                        existingModel = hashMatches[0];
-                    }
-                }
-                
-                // If no hash match, try by filename and path
-                if (!existingModel) {
-                    const allModels = modelDB.getAllModels();
-                    existingModel = allModels.find(m => 
-                        m.filename === modelData.filename && 
-                        m.local_path === modelData.local_path
-                    );
-                }
-
-                // Calculate hash if requested and needed (for new models OR existing models missing hashes)
-                if (calculateHashes && (!modelData.hash_autov2 || (existingModel && !existingModel.hash_autov2))) {
-                    try {
-                        const fullModelPath = path.join(modelDir, model.filename);
-                        const fileStats = await fs.stat(fullModelPath);
-                        const sizeCheck = checkFileSizeForHashing(fileStats.size);
-                        
-                        if (sizeCheck.isAllowed) {
-                            console.log(`[ModelScan] Calculating AutoV2 for ${model.filename} (${sizeCheck.sizeInfo.displaySize})`);
-                            const calculatedHash = await calculateFileHash(fullModelPath);
-                            if (calculatedHash) {
-                                modelData.hash_autov2 = calculatedHash;
-                                stats.hashesCalculated++;
-                                console.log(`[ModelScan] Hash calculated: ${calculatedHash}`);
-                            }
+                        const hashMatch = hashMatches[0];
+                        // Check if it's the same path (update) or different path (skip)
+                        if (hashMatch.filename === model.filename && hashMatch.local_path === model.local_path) {
+                            // Same path: Update null fields with new metadata (per scanning rules)
+                            existingModel = hashMatch;
+                            skipModel = false; // Don't skip - we want to update
                         } else {
-                            console.log(`[ModelScan] Skipping hash calculation for ${model.filename}: ${sizeCheck.reason}`);
-                            stats.hashesSkipped++;
+                            // Different path: Skip as duplicate (per scanning rules)
+                            existingModel = hashMatch;
+                            skipModel = true;
                         }
-                    } catch (hashError) {
-                        console.error(`[ModelScan] Hash calculation failed for ${model.filename}:`, hashError);
-                        stats.hashErrors++;
                     }
                 }
+                // If no hash available → treat as new model (per plan)
                 
-                if (existingModel) {
-                    // Model exists - check ALL fields for null values and potential population
-                    let hasNewInfo = false;
-                    
-                    // Enhanced debug logging - show full objects
-                    console.log(`\n[ModelScan] ======= COMPREHENSIVE DEBUG FOR ${modelData.filename} =======`);
-                    console.log(`[ModelScan] Metadata found: ${!!metadata}`);
-                    console.log(`[ModelScan] Metadata status: ${metadataStatus}`);
-                    console.log(`[ModelScan] Metadata source: ${modelData.metadata_source}`);
-                    
-                    // Show key existing model fields
-                    console.log(`[ModelScan] EXISTING MODEL KEY FIELDS:`);
-                    console.log(`  type: "${existingModel.type}"`);
-                    console.log(`  hash_autov2: "${existingModel.hash_autov2}"`);
-                    console.log(`  metadata_status: "${existingModel.metadata_status}"`);
-                    console.log(`  metadata_source: "${existingModel.metadata_source}"`);
-                    console.log(`  has_embedded_metadata: "${existingModel.has_embedded_metadata}"`);
-                    
-                    // Show key new model fields
-                    console.log(`[ModelScan] NEW MODEL DATA KEY FIELDS:`);
-                    console.log(`  type: "${modelData.type}"`);
-                    console.log(`  hash_autov2: "${modelData.hash_autov2}"`);
-                    console.log(`  metadata_status: "${modelData.metadata_status}"`);
-                    console.log(`  metadata_source: "${modelData.metadata_source}"`);
-                    console.log(`  has_embedded_metadata: "${modelData.has_embedded_metadata}"`);
-                    
-                    // Always check metadata status improvements
-                    if (metadata && metadataStatus !== 'none') {
-                        if (existingModel.metadata_status === 'none' || 
-                            (existingModel.metadata_status === 'partial' && metadataStatus === 'complete') ||
-                            (existingModel.metadata_source === 'none' && modelData.metadata_source !== 'none')) {
-                            hasNewInfo = true;
-                            console.log(`[ModelScan] ✓ Metadata status improvement detected for ${modelData.filename}`);
-                        }
-                    }
-                    
-                    // Comprehensive field checking - check ALL database fields for null values
-                    const allFieldsToCheck = [
-                        'name', 'type', 'hash_autov2', 'hash_sha256',
-                        'civitai_id', 'civitai_version_id', 'civitai_model_name', 'civitai_model_base', 
-                        'civitai_model_type', 'civitai_model_version_name', 'civitai_model_version_desc',
-                        'civitai_model_version_date', 'civitai_download_url', 'civitai_trained_words',
-                        'civitai_file_size_kb', 'civitai_nsfw', 'civitai_blurhash',
-                        'metadata_status', 'metadata_source', 'has_embedded_metadata'
-                    ];
-                    
-                    console.log(`[ModelScan] FIELD-BY-FIELD COMPARISON:`);
-                    let fieldsWithNewInfo = [];
-                    
-                    for (const field of allFieldsToCheck) {
-                        // Check if existing field is null/empty AND new data has actual content
-                        const existingValue = existingModel[field];
-                        const newValue = modelData[field];
-                        
-                        const isExistingNull = (existingValue === null || existingValue === undefined || existingValue === '');
-                        const hasNewValue = (newValue !== null && newValue !== undefined && newValue !== '');
-                        
-                        // Debug every single field comparison
-                        console.log(`  ${field}: existing="${existingValue}" → new="${newValue}" (existingNull=${isExistingNull}, hasNew=${hasNewValue})`);
-                        
-                        if (isExistingNull && hasNewValue) {
-                            hasNewInfo = true;
-                            fieldsWithNewInfo.push(field);
-                            console.log(`[ModelScan] ✓ Found new data for field "${field}": ${newValue}`);
-                        }
-                    }
-                    
-                    console.log(`[ModelScan] SUMMARY:`);
-                    console.log(`  Fields with new info: [${fieldsWithNewInfo.join(', ')}]`);
-                    console.log(`  hasNewInfo: ${hasNewInfo}`);
-                    console.log(`[ModelScan] ======= END DEBUG FOR ${modelData.filename} =======\n`);
-                    
-                    if (hasNewInfo) {
-                        // Update existing model with new information
-                        modelData.id = existingModel.id; // Preserve existing ID
-                        try {
-                    const modelId = modelDB.addOrUpdateModel(modelData);
-                    const serverId = req.headers['x-server-id'] || 'local';
-                    modelDB.updateModelServerAvailability(modelId, serverId);
-                        } catch (dbError) {
-                            console.error(`[ModelScan] Database update error for ${modelData.filename}:`, dbError.message);
-                            console.error(`[ModelScan] Problematic update modelData:`, JSON.stringify(modelData, null, 2));
-                            throw dbError;
-                        }
-                        
-                        stats.updated++;
-                        console.log(`[ModelScan] ✓ Updated model: ${modelData.filename} (new ${modelData.metadata_source} metadata, ${fieldsWithNewInfo.length} fields updated)`);
-                    } else {
-                        // No new information, skip
-                        stats.skipped++;
-                        console.log(`[ModelScan] ✗ Skipped model: ${modelData.filename} (no new information)`);
-                    }
+                // Step 5: Database operation
+                if (skipModel) {
+                    // Model already exists (by hash), skip it
+                    stats.skipped++;
                 } else {
-                    // New model - add regardless of available parameters
+                    // Always add model if no hash duplicate found
+                    // Use addOrUpdateModel but it will handle its own duplicate detection
                     try {
                         const modelId = modelDB.addOrUpdateModel(modelData);
                         const serverId = req.headers['x-server-id'] || 'local';
                         modelDB.updateModelServerAvailability(modelId, serverId);
+                        stats.added++;
+                        
+                        // Log progress every 50 models
+                        if (stats.added % 50 === 0) {
+                            console.log(`[ModelScan] Progress: ${stats.added} models added so far...`);
+                        }
                     } catch (dbError) {
-                        console.error(`[ModelScan] Database error for ${modelData.filename}:`, dbError.message);
-                        console.error(`[ModelScan] Problematic modelData:`, JSON.stringify(modelData, null, 2));
-                        throw dbError;
+                        console.error(`[ModelScan] Database error for ${model.filename}:`, dbError.message);
+                        stats.errors++;
                     }
-                    
-                    stats.added++;
-                    
-                    // Track counts by type if we have it
-                    if (modelData.type === 'checkpoint') {
-                        stats.checkpoints++;
-                    } else if (modelData.type === 'lora') {
-                        stats.loras++;
-                    }
-                    
-                    const metadataInfo = metadata ? 
-                        `(${metadataStatus} metadata from ${modelData.metadata_source})` : 
-                        '(no metadata)';
-                    console.log(`[ModelScan] Added new model: ${modelData.filename} ${metadataInfo}`);
                 }
+                
             } catch (error) {
-                console.error(`Error processing model ${model.filename}:`, error);
+                console.error(`[ModelScan] Error processing ${model.filename}:`, error.message);
                 stats.errors++;
             }
         }
-
-        // Log model count after scan
-        const postScanCount = modelDB.getAllModels().length;
-        console.log(`[ModelScan] Models in DB after scan: ${postScanCount}`);
         
-        let logMessage = `[ModelScan] Scan complete: ${stats.added} added, ${stats.updated} updated, ${stats.skipped} skipped, ${stats.errors} errors`;
-        if (calculateHashes) {
-            logMessage += `, ${stats.hashesCalculated} hashes calculated, ${stats.hashesSkipped} hashes skipped, ${stats.hashErrors} hash errors`;
-        }
-        console.log(logMessage);
-
-        let responseMessage = `Scanned ${stats.total} models: ${stats.added} added, ${stats.updated} updated, ${stats.skipped} skipped`;
-        if (calculateHashes) {
-            responseMessage += `, ${stats.hashesCalculated} hashes calculated`;
-        }
-
+        logScanPhase('SCAN_COMPLETE', stats);
+        
+        // Final database count verification
+        const finalCount = modelDB.getAllModels().length;
+        console.log(`[ModelScan] Database count after scan: ${finalCount} models`);
+        
         res.json({
             success: true,
             stats,
-            message: responseMessage
+            message: `Scan processed ${stats.total} models: ${stats.added} added, ${stats.skipped} skipped, ${stats.errors} errors. Database now has ${finalCount} models.`
         });
+        
     } catch (error) {
-        console.error('Error scanning models:', error);
+        logScanPhase('SCAN_FAILED', { error: error.message });
         res.status(500).json({ 
             success: false, 
-            message: 'Failed to scan models', 
+            message: 'Scan failed', 
             error: error.message 
         });
     }
 });
+
+/**
+ * Calculate missing hashes for a model (AutoV2 and/or SHA256)
+ * @param {Object} modelData - Model data object to update
+ * @param {Object} model - Original model scan data
+ * @param {Object} stats - Statistics object to update
+ */
+async function calculateMissingHashes(modelData, model, stats) {
+    const { calculateSHA256Hash, calculateAutoV2Hash } = require('../utils/hashCalculator');
+    const modelFilePath = path.join(model.local_path, model.filename);
+    
+    // Check what hashes we have and what we need
+    const hasAutoV2 = !!modelData.hash_autov2;
+    const hasSHA256 = !!modelData.hash_sha256;
+    
+    if (hasAutoV2 && hasSHA256) {
+        console.log(`[ModelScan] Skipping hash calculation for ${model.filename} (already has both hashes)`);
+        stats.hashesSkipped++;
+        return;
+    }
+    
+    try {
+        // Verify file exists before attempting hash calculation
+        try {
+            await fs.access(modelFilePath);
+        } catch (accessError) {
+            throw new Error(`File not accessible: ${accessError.message}`);
+        }
+        
+        // Strategy: If we need both hashes, calculate SHA256 first and derive AutoV2
+        // If we only need one, calculate just that one
+        
+        if (!hasSHA256 && !hasAutoV2) {
+            // Need both hashes - calculate them independently
+            console.log(`[ModelScan] Calculating both SHA256 and AutoV2 hashes for ${model.filename}...`);
+            
+            try {
+                // Calculate SHA256 first (full file hash)
+                const sha256Hash = await calculateSHA256Hash(modelFilePath);
+                if (sha256Hash) {
+                    modelData.hash_sha256 = sha256Hash;
+                    console.log(`[ModelScan] Calculated SHA256: ${sha256Hash}`);
+                }
+                
+                // Calculate AutoV2 independently (subset hash for model identification)
+                const autoV2Hash = await calculateAutoV2Hash(modelFilePath);
+                if (autoV2Hash) {
+                    modelData.hash_autov2 = autoV2Hash;
+                    console.log(`[ModelScan] Calculated AutoV2: ${autoV2Hash}`);
+                }
+                
+                if (sha256Hash || autoV2Hash) {
+                    stats.hashesCalculated++;
+                } else {
+                    console.warn(`[ModelScan] Both hash calculations returned null for ${model.filename}`);
+                    stats.hashErrors++;
+                }
+            } catch (hashError) {
+                console.error(`[ModelScan] Error calculating both hashes for ${model.filename}:`, hashError.message);
+                stats.hashErrors++;
+            }
+            
+        } else if (!hasSHA256 && hasAutoV2) {
+            // Need SHA256 only (already have AutoV2)
+            console.log(`[ModelScan] Calculating SHA256 hash for ${model.filename} (already has AutoV2)...`);
+            
+            const sha256Hash = await calculateSHA256Hash(modelFilePath);
+            if (sha256Hash) {
+                modelData.hash_sha256 = sha256Hash;
+                console.log(`[ModelScan] Calculated SHA256: ${sha256Hash}`);
+                stats.hashesCalculated++;
+            } else {
+                console.warn(`[ModelScan] SHA256 calculation returned null for ${model.filename}`);
+                stats.hashErrors++;
+            }
+            
+        } else if (hasSHA256 && !hasAutoV2) {
+            // Need AutoV2 only (already have SHA256) - must calculate separately
+            console.log(`[ModelScan] Calculating AutoV2 hash for ${model.filename} (already has SHA256)...`);
+            
+            const autoV2Hash = await calculateAutoV2Hash(modelFilePath);
+            if (autoV2Hash) {
+                modelData.hash_autov2 = autoV2Hash;
+                console.log(`[ModelScan] Calculated AutoV2: ${autoV2Hash}`);
+                stats.hashesCalculated++;
+            } else {
+                console.warn(`[ModelScan] AutoV2 calculation returned null for ${model.filename}`);
+                stats.hashErrors++;
+            }
+        }
+        
+    } catch (hashError) {
+        console.error(`[ModelScan] Hash calculation error for ${model.filename}:`, hashError.message);
+        console.error(`[ModelScan] Error details:`, {
+            filename: model.filename,
+            path: model.local_path,
+            errorType: hashError.constructor.name,
+            stack: hashError.stack?.split('\n')[0] // First line of stack trace
+        });
+        stats.hashErrors++;
+    }
+}
 
 /**
  * Helper function to read metadata from a model file or its associated JSON files
@@ -1123,12 +1271,21 @@ async function readModelMetadata(model) {
             const jsonData = await fs.readFile(forgeJsonPath, 'utf-8');
             const parsedJson = JSON.parse(jsonData);
             
-            // Validate that it contains model metadata (not just tensor info)
-            if (parsedJson.modelId || parsedJson.model?.id || parsedJson.civitaiVersionId || 
-                parsedJson.name || parsedJson.description || parsedJson.baseModel) {
-                jsonMetadata = parsedJson;
-                jsonSource = 'forge';
-                console.log(`[ModelScan] Found Forge-style metadata: ${forgeJsonPath}`);
+            // Accept any JSON that contains model-related fields (don't be too strict)
+            if (parsedJson && typeof parsedJson === 'object' && Object.keys(parsedJson).length > 0) {
+                // Check if it contains any model-related fields (even if null/empty)
+                const modelFields = ['modelId', 'civitaiVersionId', 'name', 'description', 'baseModel', 
+                                   'sd version', 'activation text', 'preferred weight', 'notes', 'type',
+                                   'hash_autov2', 'AutoV2', 'hash_sha256', 'SHA256'];
+                const hasModelField = modelFields.some(field => 
+                    parsedJson.hasOwnProperty(field) || parsedJson.model?.hasOwnProperty(field)
+                );
+                
+                if (hasModelField) {
+                    jsonMetadata = parsedJson;
+                    jsonSource = 'forge';
+                    console.log(`[ModelScan] Found Forge-style metadata: ${forgeJsonPath}`);
+                }
             }
         } catch (err) {
             // Forge JSON not found or invalid
@@ -1772,5 +1929,146 @@ router.get('/models/:id/hash-info', async (req, res) => {
         });
     }
 });
+
+/**
+ * Generate a simple text-based placeholder preview image
+ * @param {string} filename - Model filename
+ * @param {string} modelType - Model type (checkpoint, lora, vae, etc.)
+ * @param {string} outputPath - Where to save the placeholder image
+ */
+async function generatePlaceholderPreview(filename, modelType, outputPath) {
+    const { createCanvas } = require('canvas');
+    
+    // Determine model type and colors
+    const typeInfo = getModelTypeInfo(filename, modelType);
+    
+    // Create canvas (512x512 to match typical preview size)
+    const canvas = createCanvas(512, 512);
+    const ctx = canvas.getContext('2d');
+    
+    // Background gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, 512);
+    gradient.addColorStop(0, typeInfo.color1);
+    gradient.addColorStop(1, typeInfo.color2);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 512, 512);
+    
+    // Semi-transparent overlay for better text readability
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(0, 0, 512, 512);
+    
+    // Model type badge
+    ctx.fillStyle = typeInfo.badgeColor;
+    ctx.fillRect(20, 20, 120, 40);
+    
+    // Model type text
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(typeInfo.displayName, 80, 42);
+    
+    // Model filename (truncated if too long)
+    const displayName = filename.length > 40 ? filename.substring(0, 37) + '...' : filename;
+    ctx.font = 'bold 20px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'white';
+    
+    // Multi-line text for long filenames
+    const words = displayName.split(/[_\-\.]/);
+    let lines = [];
+    let currentLine = '';
+    
+    for (const word of words) {
+        const testLine = currentLine + (currentLine ? '_' : '') + word;
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > 450 && currentLine) {
+            lines.push(currentLine);
+            currentLine = word;
+        } else {
+            currentLine = testLine;
+        }
+    }
+    if (currentLine) lines.push(currentLine);
+    
+    // Draw filename lines
+    const startY = 256 - (lines.length * 15);
+    lines.forEach((line, index) => {
+        ctx.fillText(line, 256, startY + (index * 25));
+    });
+    
+    // Additional info
+    ctx.font = '14px Arial';
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText('No preview available', 256, 380);
+    ctx.fillText('Generated placeholder', 256, 400);
+    
+    // Icon/symbol based on type
+    ctx.font = 'bold 60px Arial';
+    ctx.fillStyle = typeInfo.iconColor;
+    ctx.fillText(typeInfo.icon, 256, 160);
+    
+    // Save the image
+    const buffer = canvas.toBuffer('image/jpeg', { quality: 0.8 });
+    await fs.writeFile(outputPath, buffer);
+}
+
+/**
+ * Get display information for different model types
+ * @param {string} filename - Model filename
+ * @param {string} modelType - Model type from metadata
+ * @returns {Object} Type information with colors and display name
+ */
+function getModelTypeInfo(filename, modelType) {
+    const lowerName = filename.toLowerCase();
+    const type = modelType?.toLowerCase();
+    
+    // Determine type from various sources
+    if (type === 'lora' || lowerName.includes('lora')) {
+        return {
+            displayName: 'LoRA',
+            color1: '#8e44ad',
+            color2: '#9b59b6',
+            badgeColor: '#8e44ad',
+            iconColor: '#ffffff',
+            icon: '🎭'
+        };
+    } else if (lowerName.includes('vae') || lowerName.includes('/vae/')) {
+        return {
+            displayName: 'VAE',
+            color1: '#27ae60',
+            color2: '#2ecc71',
+            badgeColor: '#27ae60',
+            iconColor: '#ffffff',
+            icon: '⚙️'
+        };
+    } else if (lowerName.includes('upscale') || lowerName.includes('/upscale')) {
+        return {
+            displayName: 'UPSCALER',
+            color1: '#e67e22',
+            color2: '#f39c12',
+            badgeColor: '#e67e22',
+            iconColor: '#ffffff',
+            icon: '📈'
+        };
+    } else if (type === 'checkpoint' || lowerName.includes('checkpoint')) {
+        return {
+            displayName: 'CHECKPOINT',
+            color1: '#3498db',
+            color2: '#2980b9',
+            badgeColor: '#3498db',
+            iconColor: '#ffffff',
+            icon: '🖼️'
+        };
+    } else {
+        return {
+            displayName: 'MODEL',
+            color1: '#7f8c8d',
+            color2: '#95a5a6',
+            badgeColor: '#7f8c8d',
+            iconColor: '#ffffff',
+            icon: '❓'
+        };
+    }
+}
 
 module.exports = router; 

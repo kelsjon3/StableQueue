@@ -1450,9 +1450,28 @@ document.addEventListener('DOMContentLoaded', () => {
             const baseModelFilter = document.getElementById('model-base-filter')?.value || 'all';
             const availabilityFilter = document.getElementById('model-availability-filter')?.value || 'all';
             const metadataFilter = document.getElementById('model-metadata-filter')?.value || 'all';
+            const searchTerm = document.getElementById('model-search-input')?.value.toLowerCase().trim() || '';
             
             // Filter models
             let filtered = allModelsCache;
+            
+            // Apply search filter first if there's a search term
+            if (searchTerm) {
+                filtered = filtered.filter(model => {
+                    const searchableText = [
+                        model.name || '',
+                        model.filename || '',
+                        model.type || '',
+                        model.civitai_model_base || '',
+                        model.civitai_description || '',
+                        model.civitai_trained_words || '',
+                        model.hash_autov2 || '',
+                        model.hash_sha256 || ''
+                    ].join(' ').toLowerCase();
+                    
+                    return searchableText.includes(searchTerm);
+                });
+            }
             
             if (typeFilter !== 'all') {
                 filtered = filtered.filter(model => model.type === typeFilter);
@@ -1476,10 +1495,41 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
             
-            console.log(`Rendering ${filtered.length} filtered models`);
+            console.log(`Rendering ${filtered.length} filtered models (search: "${searchTerm}")`);
+            
+            // Update search results count
+            updateSearchResultsCount(filtered.length, allModelsCache.length, searchTerm);
+            
             renderModels(filtered);
             renderDebounceTimer = null;
         }, 100); // 100ms debounce delay
+    }
+
+    // Function to update search results count display
+    function updateSearchResultsCount(filteredCount, totalCount, searchTerm) {
+        const countElement = document.getElementById('search-results-count');
+        if (!countElement) return;
+        
+        if (searchTerm) {
+            countElement.textContent = `${filteredCount} of ${totalCount} models`;
+            countElement.classList.add('has-results');
+        } else {
+            countElement.textContent = `${totalCount} models`;
+            countElement.classList.remove('has-results');
+        }
+    }
+
+    // Function to highlight search terms in text
+    function highlightSearchTerms(text, searchTerm) {
+        if (!searchTerm || !text) return text;
+        
+        const regex = new RegExp(`(${escapeRegex(searchTerm)})`, 'gi');
+        return text.replace(regex, '<span class="search-highlight">$1</span>');
+    }
+
+    // Function to escape special regex characters
+    function escapeRegex(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     // Function to render models in the grid
@@ -1498,6 +1548,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
+        // Get current search term for highlighting
+        const searchTerm = document.getElementById('model-search-input')?.value.toLowerCase().trim() || '';
+        
         models.forEach(model => {
             const card = document.createElement('div');
             card.className = 'model-card';
@@ -1505,9 +1558,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // Add NSFW data attribute for blur functionality
             card.dataset.nsfw = model.civitai_nsfw ? 'true' : 'false';
             
-            // Safely escape text content
-            const safeName = (model.name || model.filename || 'Unknown Model').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const safeType = (model.type || 'Unknown Type').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // Safely escape text content and apply search highlighting
+            const safeName = escapeHtml(model.name || model.filename || 'Unknown Model');
+            const safeType = escapeHtml(model.type || 'Unknown Type');
+            const highlightedName = searchTerm ? highlightSearchTerms(safeName, searchTerm) : safeName;
+            const highlightedType = searchTerm ? highlightSearchTerms(safeType, searchTerm) : safeType;
             
             // Get model type icon for placeholder
             const typeIcon = model.type === 'lora' ? '🎨' : '🖼️';
@@ -1536,10 +1591,10 @@ document.addEventListener('DOMContentLoaded', () => {
             card.innerHTML = `
                 ${!previewUrl ? `<div class="model-placeholder-icon">${typeIcon}</div>` : ''}
                 <div class="model-card-overlay">
-                    <h3 class="model-card-title" title="${safeName}">${safeName}</h3>
+                    <h3 class="model-card-title" title="${safeName}">${highlightedName}</h3>
                     <div class="model-card-hash">${hashDisplay}</div>
                     <div class="model-card-actions">
-                        <div class="model-type-badge">${safeType}</div>
+                        <div class="model-type-badge">${highlightedType}</div>
                         ${civitaiUrl ? `<img src="/civitai-logo.png" class="civitai-logo" title="View on Civitai" onclick="window.open('${civitaiUrl}', '_blank')">` : ''}
                         <img src="/todo-list-icon.png" class="todo-list-icon" title="Retrieve Missing Details" onclick="showRetrieveDetailsModal('${model.id}')">
                     </div>
@@ -1849,6 +1904,44 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn(`Filter element ${filterId} not found`);
             }
         });
+
+        // Set up search functionality
+        const searchInput = document.getElementById('model-search-input');
+        const clearSearchBtn = document.getElementById('clear-search-btn');
+        
+        if (searchInput) {
+            // Search as user types (with debounce already handled in applyFiltersAndRender)
+            searchInput.addEventListener('input', () => {
+                const searchTerm = searchInput.value.trim();
+                
+                // Show/hide clear button
+                if (clearSearchBtn) {
+                    clearSearchBtn.style.display = searchTerm ? 'flex' : 'none';
+                }
+                
+                // Apply filters with search
+                applyFiltersAndRender();
+            });
+            
+            // Handle Enter key
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    applyFiltersAndRender();
+                }
+            });
+        }
+        
+        if (clearSearchBtn) {
+            clearSearchBtn.addEventListener('click', () => {
+                if (searchInput) {
+                    searchInput.value = '';
+                    searchInput.focus();
+                    clearSearchBtn.style.display = 'none';
+                    applyFiltersAndRender();
+                }
+            });
+        }
         
         // Set up scan button
         // Setup models controls
