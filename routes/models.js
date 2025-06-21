@@ -20,6 +20,12 @@ const CIVITAI_RATE_LIMIT = {
     timeout: 10000 // 10 second timeout
 };
 
+// Cache for 404 hashes to avoid repeat API calls in the same scan session
+const CIVITAI_404_CACHE = new Set();
+
+// Scan cancellation flag
+let SCAN_CANCELLED = false;
+
 /**
  * Make a rate-limited request to Civitai API
  * @param {string} url - The API URL to request
@@ -102,14 +108,11 @@ router.get('/models/:id/preview', async (req, res) => {
         const modelId = req.params.id;
         const type = req.query.type || 'checkpoint';
         
-        console.log(`[Preview Debug] Request for model: ${modelId}, type: ${type}`);
-        
         // Look up model in database to get the preview_path
         const allModels = modelDB.getAllModels();
         const model = allModels.find(m => m.filename === modelId);
         
         if (!model) {
-            console.log(`[Preview Debug] Model not found in database: ${modelId}`);
             return res.status(404).json({
                 success: false,
                 message: 'Model not found in database'
@@ -118,22 +121,17 @@ router.get('/models/:id/preview', async (req, res) => {
         
         // Use the stored preview_path from database
         if (!model.preview_path) {
-            console.log(`[Preview Debug] No preview_path stored for model: ${modelId}`);
             return res.status(404).json({
                 success: false,
                 message: 'No preview image found for this model'
             });
         }
         
-        console.log(`[Preview Debug] Using stored preview_path: ${model.preview_path}`);
-        
         // Check if the preview file exists
         try {
             await fs.access(model.preview_path);
-            console.log(`[Preview Debug] Serving preview: ${model.preview_path}`);
             res.sendFile(model.preview_path);
         } catch (err) {
-            console.log(`[Preview Debug] Preview file not found at stored path: ${model.preview_path}`);
             return res.status(404).json({
                 success: false,
                 message: 'Preview image file not found'
@@ -449,7 +447,7 @@ router.post('/models/:id/refresh-metadata', async (req, res) => {
                 await fs.access(option);
                 existingPreviewPath = option;
                 console.log(`[Models] Found existing preview image at ${option}`);
-                break;
+                break; // Only delete the first found preview
             } catch (err) {
                 // Continue checking other formats
             }
@@ -781,23 +779,715 @@ function logModelProcessing(model, step, result = {}) {
 }
 
 /**
+ * Core model scanning function that can process all models or a filtered subset
+ * @param {Array} modelsToProcess - Array of model objects to process
+ * @param {Object} options - Scanning options
+ * @returns {Object} - Scanning results with stats
+ */
+async function processModels(modelsToProcess, options = {}) {
+    const { modelPath } = options;
+    const jobStatusManager = require('../services/jobStatusManager');
+    
+    let stats = {
+        total: modelsToProcess.length,
+        added: 0,
+        updated: 0,
+        refreshed: 0,
+        skipped: 0,
+        errors: 0,
+        hashesCalculated: 0,
+        hashesSkipped: 0,
+        hashErrors: 0,
+        civitaiCalls: 0
+    };
+
+    // Track duplicates by AutoV2 hash
+    const hashTracker = new Map(); // hash -> [array of {filename, local_path}]
+    const duplicateGroups = []; // Array of duplicate groups for reporting
+
+    // Broadcast scan start
+    jobStatusManager.broadcastScanStart();
+
+    // Process models
+    for (let i = 0; i < modelsToProcess.length; i++) {
+        const model = modelsToProcess[i];
+        
+        try {
+            // Broadcast current progress
+            const progress = {
+                current: i + 1,
+                total: modelsToProcess.length,
+                currentFile: model.filename,
+                stats: { 
+                    ...stats,
+                    duplicates: duplicateGroups.length // Add current duplicate count
+                }
+            };
+            jobStatusManager.broadcastScanProgress(progress);
+
+            // Check for scan cancellation
+            if (SCAN_CANCELLED) {
+                console.log(`[ModelScan] Scan cancelled at model ${i + 1}/${modelsToProcess.length}: ${model.filename}`);
+                
+                // Duplicate groups are already maintained in real-time, no need to regenerate
+
+                // Add duplicate info to stats
+                const cancelledStats = {
+                    ...stats,
+                    cancelled: true,
+                    message: `Scan stopped by user after processing ${i}/${modelsToProcess.length} models`,
+                    duplicates: {
+                        count: duplicateGroups.length,
+                        groups: duplicateGroups
+                    }
+                };
+
+                // Log duplicate report for cancelled scan
+                if (duplicateGroups.length > 0) {
+                    console.log(`\n[ModelScan] DUPLICATE REPORT (Partial - scan stopped): Found ${duplicateGroups.length} groups of duplicate files:`);
+                    duplicateGroups.forEach((group, index) => {
+                        console.log(`\n  Group ${index + 1} (Hash: ${group.hash}):`);
+                        group.files.forEach(file => {
+                            console.log(`    - ${file.filename} at ${file.path}`);
+                        });
+                    });
+                    console.log('');
+                } else {
+                    console.log('[ModelScan] No duplicate files found in processed models (scan was stopped)');
+                }
+                
+                // Broadcast scan stopped status
+                jobStatusManager.broadcastScanComplete(cancelledStats);
+                
+                // Return current stats with cancellation info
+                return cancelledStats;
+            }
+
+            // Step 1: Setup model data
+            const modelDir = modelPath ? path.join(modelPath, model.relativePath || '') : model.local_path;
+            model.local_path = modelDir;
+            
+            // Step 2: Read metadata
+            const metadata = await readModelMetadata(model);
+            
+            // Step 3: Create model data object
+            let modelData = {
+                name: model.filename,
+                type: null,
+                local_path: modelDir,
+                filename: model.filename,
+                preview_path: model.previewPath || null,
+                preview_url: model.previewPath ? `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint` : null,
+                metadata_status: metadata ? (metadata._complete ? 'complete' : 'partial') : 'none',
+                metadata_source: metadata?._json_source || (metadata?._has_embedded ? 'embedded' : 'none'),
+                has_embedded_metadata: metadata?._has_embedded || false
+            };
+            
+            // Step 3.5: Handle preview images (Phase 5 from plan)
+            if (!model.previewPath) {
+                // Check for *.preview.jpeg files ONLY (per rule #1)
+                const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
+                const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                try {
+                    await fs.access(previewPath);
+                    modelData.preview_path = previewPath;
+                    modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                } catch (err) {
+                    // No local preview image found - will download later after hash determination
+                    modelData.preview_path = null;
+                }
+            }
+            
+            // Extract metadata fields if available
+            if (metadata) {
+                // Helper function to safely convert complex values to strings for SQLite
+                const toSafeValue = (value) => {
+                    if (value === null || value === undefined) return null;
+                    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+                    if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+                    return String(value);
+                };
+                
+                // Handle different hash field names from different sources
+                const hash_autov2 = metadata.hash_autov2 || metadata.AutoV2 || null;
+                const hash_sha256 = metadata.hash_sha256 || metadata.SHA256 || metadata.sha256 || null;
+                
+                // Extract type from metadata (Priority Order per Rule #3)
+                let extractedType = null;
+                
+                // Priority 1: Direct type field (Forge/Civitai JSON)
+                if (metadata.type) {
+                    extractedType = metadata.type.toLowerCase();
+                } else if (metadata.model?.type) {
+                    extractedType = metadata.model.type.toLowerCase();
+                }
+                // Priority 2: Civitai model type
+                else if (metadata.civitai_model_type) {
+                    extractedType = metadata.civitai_model_type.toLowerCase();
+                }
+                // Priority 3: Embedded metadata architecture 
+                else if (metadata['modelspec.architecture']) {
+                    const architecture = metadata['modelspec.architecture'];
+                    if (architecture && typeof architecture === 'string') {
+                        if (architecture.includes('/lora') || architecture.includes('lora')) {
+                            extractedType = 'lora';
+                        } else if (architecture.includes('/checkpoint') || architecture.includes('checkpoint')) {
+                            extractedType = 'checkpoint';
+                        }
+                    }
+                }
+                
+                // Normalize type values
+                if (extractedType) {
+                    if (extractedType.includes('lora') || extractedType === 'lora') {
+                        modelData.type = 'lora';
+                    } else if (extractedType.includes('checkpoint') || extractedType === 'checkpoint') {
+                        modelData.type = 'checkpoint';
+                    }
+                }
+                
+                // Add all metadata fields (handle both Civitai and Forge formats)
+                Object.assign(modelData, {
+                    hash_autov2: hash_autov2,
+                    hash_sha256: hash_sha256,
+                    civitai_id: toSafeValue(metadata.modelId || metadata.model?.id),
+                    civitai_version_id: toSafeValue(metadata.modelVersionId || metadata.model?.modelVersionId),
+                    civitai_model_name: toSafeValue(metadata.name || metadata.model?.name),
+                    civitai_model_base: toSafeValue(metadata.baseModel || metadata.model?.baseModel || metadata['sd version']),
+                    civitai_model_type: toSafeValue(metadata.type || metadata.model?.type),
+                    civitai_model_version_name: toSafeValue(metadata.versionName || metadata.name),
+                    civitai_model_version_desc: toSafeValue(metadata.description || metadata.model?.description || metadata.notes),
+                    civitai_model_version_date: toSafeValue(metadata.createdAt || metadata.model?.createdAt),
+                    civitai_download_url: toSafeValue(metadata.downloadUrl || metadata.model?.downloadUrl),
+                    civitai_trained_words: toSafeValue(getEnhancedActivationText(metadata) || metadata['activation text']),
+                    civitai_file_size_kb: toSafeValue(metadata.fileSizeKB || metadata['preferred weight']),
+                    civitai_nsfw: metadata.model?.nsfw || metadata.nsfw || false
+                });
+            }
+            
+            // Step 4: Hash-only duplicate detection (per plan)
+            let existingModel = null;
+            let skipModel = false;
+            
+            // Check if model already exists in database by filename/path to get ALL existing data
+            const existingByPath = modelDB.findModelByPath(model.filename, model.local_path);
+            if (existingByPath) {
+                // Load ALL existing database fields into modelData (only if modelData field is null/undefined)
+                // This prevents data loss and unnecessary API calls
+                const fieldsToLoad = [
+                    'hash_autov2', 'hash_sha256', 'civitai_id', 'civitai_version_id', 'civitai_model_name',
+                    'civitai_model_base', 'civitai_model_type', 'civitai_model_version_name', 
+                    'civitai_model_version_desc', 'civitai_model_version_date', 'civitai_download_url',
+                    'civitai_trained_words', 'civitai_file_size_kb', 'civitai_nsfw', 'civitai_blurhash',
+                    'civitai_checked', 'preview_path', 'preview_url', 'forge_format'
+                ];
+                
+                let fieldsLoaded = 0;
+                fieldsToLoad.forEach(field => {
+                    if (existingByPath[field] !== null && existingByPath[field] !== undefined && 
+                        (modelData[field] === null || modelData[field] === undefined)) {
+                        
+                        // Convert SQLite boolean values to JavaScript booleans for consistency
+                        if (field === 'civitai_nsfw' || field === 'has_embedded_metadata') {
+                            modelData[field] = existingByPath[field] === 1 || existingByPath[field] === '1' || existingByPath[field] === true;
+                        } else {
+                            modelData[field] = existingByPath[field];
+                        }
+                        fieldsLoaded++;
+                    }
+                });
+                
+                // Also load type if not already determined
+                if (existingByPath.type && !modelData.type) {
+                    modelData.type = existingByPath.type;
+                    fieldsLoaded++;
+                }
+                
+                // Load metadata status fields if they're more complete in database
+                if (existingByPath.metadata_status && existingByPath.metadata_status !== 'incomplete' && 
+                    (!modelData.metadata_status || modelData.metadata_status === 'incomplete' || modelData.metadata_status === 'none')) {
+                    modelData.metadata_status = existingByPath.metadata_status;
+                    fieldsLoaded++;
+                }
+                
+                if (existingByPath.metadata_source && existingByPath.metadata_source !== 'none' && 
+                    (!modelData.metadata_source || modelData.metadata_source === 'none')) {
+                    modelData.metadata_source = existingByPath.metadata_source;
+                    fieldsLoaded++;
+                }
+                
+                if (existingByPath.has_embedded_metadata !== null && modelData.has_embedded_metadata === false) {
+                    // Convert SQLite integer boolean to JavaScript boolean
+                    modelData.has_embedded_metadata = existingByPath.has_embedded_metadata === 1 || existingByPath.has_embedded_metadata === '1' || existingByPath.has_embedded_metadata === true;
+                    fieldsLoaded++;
+                }
+                
+                console.log(`[ModelScan] Found existing model: ${model.filename} - loaded ${fieldsLoaded} fields from database`);
+            }
+            
+            // Step 4.5: Calculate missing hashes - MANDATORY for proper system function
+            // Per workflow: "Hash is mandatory - every model must have an AutoV2 hash before proceeding"
+            // Always calculate missing hashes regardless of user preference
+            if (!modelData.hash_autov2 || !modelData.hash_sha256) {
+                console.log(`[ModelScan] Missing hashes for ${model.filename} - calculating now (mandatory)`);
+                await calculateMissingHashes(modelData, model, stats);
+            }
+            
+            // Step 4.6: Enhanced duplicate detection and cleanup (per issue #3)
+            // If 2 database entries with the same hash exist, delete the entry giving priority to entry with both hashes present
+            if (modelData.hash_autov2 || modelData.hash_sha256) {
+                const hashToCheck = modelData.hash_autov2 || modelData.hash_sha256;
+                const hashType = modelData.hash_autov2 ? 'autov2' : 'sha256';
+                const existingModels = modelDB.findModelsByHash(hashToCheck, hashType);
+                
+                if (existingModels.length >= 2) {
+                    console.log(`[ModelScan] Found ${existingModels.length} existing models with same ${hashType} hash: ${hashToCheck}`);
+                    
+                    // Sort by completeness: models with both hashes first, then by ID (older first)
+                    existingModels.sort((a, b) => {
+                        const aComplete = !!(a.hash_autov2 && a.hash_sha256);
+                        const bComplete = !!(b.hash_autov2 && b.hash_sha256);
+                        
+                        if (aComplete && !bComplete) return -1;  // a has both hashes, keep it
+                        if (!aComplete && bComplete) return 1;   // b has both hashes, keep it
+                        return a.id - b.id; // Both same completeness, keep older (lower ID)
+                    });
+                    
+                    // Keep the first (most complete/oldest), delete the rest
+                    const toKeep = existingModels[0];
+                    const toDelete = existingModels.slice(1);
+                    
+                    console.log(`[ModelScan] Keeping model ID ${toKeep.id} (${toKeep.hash_autov2 ? 'has AutoV2' : 'no AutoV2'}, ${toKeep.hash_sha256 ? 'has SHA256' : 'no SHA256'})`);
+                    
+                    for (const duplicate of toDelete) {
+                        console.log(`[ModelScan] Deleting duplicate model ID ${duplicate.id}: ${duplicate.filename} (${duplicate.hash_autov2 ? 'has AutoV2' : 'no AutoV2'}, ${duplicate.hash_sha256 ? 'has SHA256' : 'no SHA256'})`);
+                        modelDB.deleteModel(duplicate.id);
+                        if (!stats.deleted) stats.deleted = 0;
+                        stats.deleted++;
+                    }
+                }
+            }
+
+            // Track duplicates by AutoV2 hash (Step 2 from workflow) - Do this BEFORE database logic
+            if (modelData.hash_autov2) {
+                const fileInfo = {
+                    filename: model.filename,
+                    local_path: model.local_path,
+                    fullPath: path.join(model.local_path, model.filename)
+                };
+                
+                if (!hashTracker.has(modelData.hash_autov2)) {
+                    hashTracker.set(modelData.hash_autov2, []);
+                }
+                hashTracker.get(modelData.hash_autov2).push(fileInfo);
+                
+                // Update duplicate count in real-time for UI
+                const currentDuplicateCount = Array.from(hashTracker.values()).filter(files => files.length > 1).length;
+                if (currentDuplicateCount !== duplicateGroups.length) {
+                    duplicateGroups.length = 0; // Clear existing
+                    for (const [hash, files] of hashTracker.entries()) {
+                        if (files.length > 1) {
+                            duplicateGroups.push({
+                                hash,
+                                files: files.map(f => ({ filename: f.filename, path: f.local_path, fullPath: f.fullPath }))
+                            });
+                        }
+                    }
+                }
+            }
+            
+            // Step 4.7: Fetch Civitai metadata only if we need it
+            // Don't call API if: 1) already has Civitai data, 2) marked as not_found, 3) in 404 cache
+            const hasCivitaiData = modelData.civitai_id || modelData.civitai_version_id || modelData.civitai_model_name;
+            const markedAsNotFound = modelData.civitai_checked === 'not_found';
+            const hashAlready404 = CIVITAI_404_CACHE.has(modelData.hash_autov2);
+            
+            const needsCivitaiCheck = modelData.hash_autov2 && 
+                !hasCivitaiData && 
+                !markedAsNotFound && 
+                !hashAlready404;
+            
+            if (needsCivitaiCheck) {
+                try {
+                    console.log(`[ModelScan] Fetching Civitai metadata for ${model.filename} using AutoV2 hash ${modelData.hash_autov2}`);
+                    stats.civitaiCalls++;
+                    
+                    const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${modelData.hash_autov2}`);
+                    const modelVersion = hashResponse.data;
+                    
+                    if (modelVersion) {
+                        console.log(`[ModelScan] Found Civitai metadata for ${model.filename}: ${modelVersion.model?.name || 'Unknown'}`);
+                        
+                        // Extract and store Civitai metadata (only update null fields per scanning rules)
+                        if (!modelData.civitai_id && (modelVersion.modelId || modelVersion.model?.id)) {
+                            modelData.civitai_id = modelVersion.modelId || modelVersion.model.id;
+                        }
+                        if (!modelData.civitai_version_id && modelVersion.id) {
+                            modelData.civitai_version_id = modelVersion.id;
+                        }
+                        if (!modelData.civitai_model_name && modelVersion.model?.name) {
+                            modelData.civitai_model_name = modelVersion.model.name;
+                        }
+                        if (!modelData.civitai_model_base && modelVersion.baseModel) {
+                            modelData.civitai_model_base = modelVersion.baseModel;
+                        }
+                        if (!modelData.civitai_model_type && modelVersion.model?.type) {
+                            modelData.civitai_model_type = modelVersion.model.type;
+                        }
+                        if (!modelData.civitai_model_version_name && modelVersion.name) {
+                            modelData.civitai_model_version_name = modelVersion.name;
+                        }
+                        if (!modelData.civitai_model_version_desc && modelVersion.description) {
+                            modelData.civitai_model_version_desc = modelVersion.description;
+                        }
+                        if (!modelData.civitai_model_version_date && modelVersion.createdAt) {
+                            modelData.civitai_model_version_date = modelVersion.createdAt;
+                        }
+                        if (!modelData.civitai_download_url && modelVersion.downloadUrl) {
+                            modelData.civitai_download_url = modelVersion.downloadUrl;
+                        }
+                        if (!modelData.civitai_trained_words && modelVersion.trainedWords) {
+                            modelData.civitai_trained_words = JSON.stringify(modelVersion.trainedWords);
+                        }
+                        if (!modelData.civitai_nsfw && modelVersion.model?.nsfw) {
+                            modelData.civitai_nsfw = modelVersion.model.nsfw;
+                        }
+                        if (!modelData.civitai_blurhash && modelVersion.images?.[0]?.hash) {
+                            modelData.civitai_blurhash = modelVersion.images[0].hash;
+                        }
+                        
+                        // Update metadata source if we got data from Civitai
+                        if (!modelData.metadata_source || modelData.metadata_source === 'none') {
+                            modelData.metadata_source = 'civitai';
+                            modelData.metadata_status = 'complete';
+                        }
+                        
+                        // Mark as successfully found on Civitai
+                        modelData.civitai_checked = 'found';
+                    } else {
+                        console.log(`[ModelScan] No Civitai metadata found for hash ${modelData.hash_autov2}`);
+                    }
+                } catch (metadataError) {
+                    console.warn(`[ModelScan] Failed to fetch Civitai metadata for ${model.filename}:`, metadataError.message);
+                    console.log(`[ModelScan DEBUG] Error details for ${model.filename}:`, {
+                        message: metadataError.message,
+                        hasResponse: !!metadataError.response,
+                        responseStatus: metadataError.response?.status,
+                        messageIncludes404: metadataError.message.includes('404'),
+                        responseIs404: metadataError.response && metadataError.response.status === 404
+                    });
+                    
+                    // If 404 error, mark as not found to prevent future API calls
+                    if (metadataError.message.includes('404') || (metadataError.response && metadataError.response.status === 404)) {
+                        console.log(`[ModelScan] Model ${model.filename} not found on Civitai (404) - marking as not_found`);
+                        
+                        // Add hash to session 404 cache to avoid repeat API calls in this scan
+                        CIVITAI_404_CACHE.add(modelData.hash_autov2);
+                        
+                        // Mark as not found on Civitai - this prevents future API calls
+                        modelData.civitai_checked = 'not_found';
+                        
+                        // Mark metadata as checked but not found
+                        if (!modelData.metadata_source || modelData.metadata_source === 'none') {
+                            modelData.metadata_source = 'none';
+                            modelData.metadata_status = 'none';
+                        }
+                    } else {
+                        console.log(`[ModelScan DEBUG] 404 condition not met for ${model.filename} - not setting as not_found`);
+                    }
+                }
+            }
+            
+            // Step 6: Check for local preview image and download if needed
+            // Per Step 6: Check for local preview image named {modelname}.preview.jpeg first
+            if (!modelData.preview_path && modelData.hash_autov2 && modelData.civitai_checked !== 'not_found' && !CIVITAI_404_CACHE.has(modelData.hash_autov2)) {
+                const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
+                const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                const autoV2Hash = modelData.hash_autov2;
+                
+                // Double-check if preview file exists before making API call
+                try {
+                    await fs.access(previewPath);
+                    // Preview file exists, use it
+                    modelData.preview_path = previewPath;
+                    modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                    console.log(`[ModelScan] Found existing preview image: ${previewPath}`);
+                } catch (accessError) {
+                    // Preview doesn't exist, try to download from Civitai
+                    try {
+                        console.log(`[ModelScan] Attempting to download preview for ${model.filename} using AutoV2 hash ${autoV2Hash}`);
+                        
+                        // Use Civitai hash-based lookup
+                        const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${autoV2Hash}`);
+                        const modelVersion = hashResponse.data;
+                        
+                        if (modelVersion && modelVersion.images && modelVersion.images.length > 0) {
+                            // Download preview image
+                            const previewUrl = modelVersion.images[0].url;
+                            console.log(`[ModelScan] Downloading preview image from: ${previewUrl}`);
+                            
+                            // Download the image
+                            const imageResponse = await rateLimitedCivitaiRequest(previewUrl, { responseType: 'arraybuffer' });
+                            const imageData = imageResponse.data;
+                            
+                            // Save as *.preview.jpeg (exact format per Rule #1)
+                            await fs.writeFile(previewPath, imageData);
+                            console.log(`[ModelScan] Downloaded preview image to ${previewPath}`);
+                            
+                            modelData.preview_path = previewPath;
+                            modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                        } else {
+                            console.log(`[ModelScan] No preview images available for hash ${autoV2Hash} - generating placeholder`);
+                            // Generate placeholder when no images are available on Civitai
+                            try {
+                                await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                                
+                                modelData.preview_path = previewPath;
+                                modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                                console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
+                            } catch (placeholderError) {
+                                console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
+                            }
+                        }
+                    } catch (downloadError) {
+                        console.warn(`[ModelScan] Failed to download preview for ${model.filename} using hash ${modelData.hash_autov2}:`, downloadError.message);
+                        
+                        // Generate placeholder image for 404 errors only (model not found on Civitai)
+                        // Other errors (network, rate limits) should allow retry on next scan
+                        if (downloadError.message.includes('404') || (downloadError.response && downloadError.response.status === 404)) {
+                            // Add to 404 cache to avoid repeat API calls in this scan
+                            CIVITAI_404_CACHE.add(modelData.hash_autov2);
+                            try {
+                                console.log(`[ModelScan] Generating placeholder preview for ${model.filename} (404 - not found on Civitai)`);
+                                await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                                
+                                modelData.preview_path = previewPath;
+                                modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                                console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
+                            } catch (placeholderError) {
+                                console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
+                            }
+                        }
+                    }
+                }
+            } else if (!modelData.preview_path && modelData.hash_autov2 && modelData.civitai_checked === 'not_found') {
+                // Model is known to not exist on Civitai, generate placeholder
+                const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
+                const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
+                
+                try {
+                    console.log(`[ModelScan] Model ${model.filename} not on Civitai - generating placeholder preview`);
+                    await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
+                    
+                    modelData.preview_path = previewPath;
+                    modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
+                    console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
+                } catch (placeholderError) {
+                    console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
+                }
+            } else if (!modelData.preview_path) {
+                console.log(`[ModelScan] No AutoV2 hash for ${model.filename} - skipping preview download`);
+            }
+            
+            // Step 4.8: Check for existing database entry by filename AND path (per step #2)
+            // Create database entry for new file if filename OR local_path is unique
+            const existingByExactPath = modelDB.findModelByPath(model.filename, model.local_path);
+            if (existingByExactPath) {
+                // Same filename + path: Update existing entry with new metadata
+                existingModel = existingByExactPath;
+                skipModel = false; // Don't skip - we want to update
+                console.log(`[ModelScan] Found existing database entry for ${model.filename} at same path - will update`);
+            } else {
+                // Different filename or path: Create new database entry (per step #2)
+                existingModel = null;
+                skipModel = false; // Don't skip - create new entry
+                console.log(`[ModelScan] Creating new database entry for ${model.filename} (unique filename/path combination)`);
+            }
+            
+            // Step 5: Database operation
+            if (skipModel) {
+                // Model already exists (by hash), skip it
+                stats.skipped++;
+                console.log(`[ModelScan] Skipping duplicate model: ${model.filename} (hash match with ${existingModel.filename})`);
+            } else if (existingModel) {
+                // Model exists at same path, update it
+                try {
+                    // Log what fields are being updated by comparing existing vs new data
+                    const fieldsToCheck = [
+                        'hash_autov2', 'hash_sha256', 'civitai_id', 'civitai_version_id', 'civitai_model_name',
+                        'civitai_model_base', 'civitai_model_type', 'civitai_model_version_name', 
+                        'civitai_model_version_desc', 'civitai_model_version_date', 'civitai_download_url',
+                        'civitai_trained_words', 'civitai_file_size_kb', 'civitai_nsfw', 'civitai_blurhash',
+                        'civitai_checked', 'preview_path', 'preview_url', 'forge_format', 'type',
+                        'metadata_status', 'metadata_source', 'has_embedded_metadata'
+                    ];
+                    
+                    const updatedFields = [];
+                    fieldsToCheck.forEach(field => {
+                        const existingValue = existingModel[field];
+                        const newValue = modelData[field];
+                        
+                        // Check if the field will actually be updated (new value is different and not null)
+                        // Handle boolean comparisons specially
+                        let valuesAreDifferent = false;
+                        
+                        if (field === 'civitai_nsfw' || field === 'has_embedded_metadata') {
+                            // Normalize both values to booleans for comparison
+                            const existingBool = existingValue === 1 || existingValue === '1' || existingValue === true;
+                            const newBool = newValue === true;
+                            valuesAreDifferent = existingBool !== newBool;
+                        } else {
+                            valuesAreDifferent = (newValue !== null && newValue !== undefined && newValue !== existingValue);
+                        }
+                        
+                        if (valuesAreDifferent) {
+                            updatedFields.push(`${field}: "${existingValue}" → "${newValue}"`);
+                        }
+                    });
+                    
+                    modelDB.addOrUpdateModel(modelData);
+                    
+                    if (updatedFields.length > 0) {
+                        // Actual field changes - count as update
+                        stats.updated++;
+                        console.log(`[ModelScan] Updated existing model: ${model.filename}`);
+                        console.log(`[ModelScan]   Fields updated: ${updatedFields.join(', ')}`);
+                    } else {
+                        // Only timestamp updated - don't count as update in stats
+                        stats.refreshed++;
+                        console.log(`[ModelScan] Refreshed existing model: ${model.filename} (no field changes - timestamp updated)`);
+                    }
+                } catch (updateError) {
+                    console.error(`[ModelScan] Failed to update model ${model.filename}:`, updateError);
+                    stats.errors++;
+                }
+            } else {
+                // New model, add it
+                try {
+                    const newModel = modelDB.addOrUpdateModel(modelData);
+                    stats.added++;
+                    console.log(`[ModelScan] Added new model: ${model.filename} (ID: ${newModel.id})`);
+                } catch (addError) {
+                    console.error(`[ModelScan] Failed to add model ${model.filename}:`, addError);
+                    stats.errors++;
+                }
+            }
+            
+        } catch (modelError) {
+            console.error(`[ModelScan] Error processing model ${model.filename}:`, modelError);
+            stats.errors++;
+        }
+    }
+    
+    // Step 6: Post-processing - Mark duplicate models (no automatic deletion)
+    // Identify models with the same hash and mark them as duplicates for user review
+    console.log(`\n[ModelScan] POST-PROCESSING: Identifying duplicate models...`);
+    
+    const duplicateHashes = new Map(); // hash -> [model_ids]
+    
+    // Find all models with the same hash
+    const allModels = modelDB.getAllModels();
+    allModels.forEach(model => {
+        if (model.hash_autov2) {
+            if (!duplicateHashes.has(model.hash_autov2)) {
+                duplicateHashes.set(model.hash_autov2, []);
+            }
+            duplicateHashes.get(model.hash_autov2).push(model);
+        }
+    });
+    
+    // Mark duplicates in the database for UI indication
+    duplicateHashes.forEach((models, hash) => {
+        if (models.length > 1) {
+            console.log(`[ModelScan] Found ${models.length} models with hash ${hash} - marking as duplicates:`);
+            models.forEach((model, index) => {
+                console.log(`  - ID ${model.id}: ${model.filename} (${model.local_path})`);
+                
+                // Mark all models with this hash as duplicates
+                try {
+                    modelDB.markModelAsDuplicate(model.id, hash, models.length, index + 1);
+                } catch (markError) {
+                    console.error(`[ModelScan] Failed to mark model ID ${model.id} as duplicate:`, markError.message);
+                }
+            });
+        }
+    });
+    
+    console.log(`[ModelScan] POST-PROCESSING: Duplicate identification complete (no files deleted)`);
+    
+    // Step 7: Clean up stale duplicate markings
+    // If a user manually deleted duplicate files, we need to clear duplicate status for remaining unique files
+    console.log(`\n[ModelScan] POST-PROCESSING: Cleaning up stale duplicate markings...`);
+    
+    const staleCleanupCount = await cleanupStaleDuplicateMarkings();
+    if (staleCleanupCount > 0) {
+        console.log(`[ModelScan] POST-PROCESSING: Cleared duplicate status for ${staleCleanupCount} models that are now unique`);
+    } else {
+        console.log(`[ModelScan] POST-PROCESSING: No stale duplicate markings found`);
+    }
+    
+    // Note: No automatic deletion - user can review duplicates and decide what to do
+
+    // Duplicate groups are already maintained in real-time during processing
+    // No need to regenerate them here
+
+    // Add duplicate info to stats
+    stats.duplicates = {
+        count: duplicateGroups.length,
+        groups: duplicateGroups
+    };
+
+    // Log duplicate report
+    if (duplicateGroups.length > 0) {
+        console.log(`\n[ModelScan] DUPLICATE REPORT: Found ${duplicateGroups.length} groups of duplicate files:`);
+        duplicateGroups.forEach((group, index) => {
+            console.log(`\n  Group ${index + 1} (Hash: ${group.hash}):`);
+            group.files.forEach(file => {
+                console.log(`    - ${file.filename} at ${file.path}`);
+            });
+        });
+        console.log('');
+    } else {
+        console.log('[ModelScan] No duplicate files found (all AutoV2 hashes are unique)');
+    }
+
+    // Broadcast scan completion
+    jobStatusManager.broadcastScanComplete(stats);
+    
+    return stats;
+}
+
+/**
  * POST /api/v1/models/scan
  * Scans configured model directories for models and updates the database
  * Uses metadata from .civitai.json files or embedded metadata
  */
 router.post('/models/scan', async (req, res) => {
-    logScanPhase('INITIALIZATION', { calculateHashes: req.body.calculateHashes });
+    logScanPhase('INITIALIZATION');
     
     try {
-        const { calculateHashes = false } = req.body;
+        // Reset scan cancellation flag at the start of each scan
+        SCAN_CANCELLED = false;
+        console.log('[ModelScan] Reset scan cancellation flag');
+        
+        // Clear session-based 404 cache at the start of each scan
+        CIVITAI_404_CACHE.clear();
+        console.log('[ModelScan] Cleared session 404 cache for new scan');
         
         // Log database state before
         const preScanCount = modelDB.getAllModels().length;
         logScanPhase('PRE_SCAN_STATE', { modelsInDB: preScanCount });
         
-        const modelPath = process.env.MODEL_PATH || process.env.CHECKPOINT_PATH;
+        let modelPath = process.env.MODEL_PATH || process.env.CHECKPOINT_PATH;
         if (!modelPath) {
             throw new Error('Model path not configured');
+        }
+        
+        // Allow scanning of specific subdirectory for testing
+        const scanSubdir = req.body.subdirectory || req.query.subdirectory;
+        if (scanSubdir) {
+            modelPath = path.join(modelPath, scanSubdir);
+            console.log(`[ModelScan] Scanning subdirectory: ${modelPath}`);
         }
         
         logScanPhase('DIRECTORY_DISCOVERY', { modelPath });
@@ -812,381 +1502,25 @@ router.post('/models/scan', async (req, res) => {
             processingCount: allModels.length
         });
         
-        let stats = {
-            total: allModels.length,
-            added: 0,
-            updated: 0,
-            skipped: 0,
-            errors: 0,
-            hashesCalculated: 0,
-            hashesSkipped: 0,
-            hashErrors: 0
-        };
-
-        // Process models
-        for (const model of allModels) {
-            try {
-                // Step 1: Setup model data
-                const modelDir = path.join(modelPath, model.relativePath || '');
-                model.local_path = modelDir;
-                
-                // Step 2: Read metadata
-                const metadata = await readModelMetadata(model);
-                
-                // Step 3: Create model data object
-                const modelData = {
-                    name: model.filename,
-                    type: null,
-                    local_path: modelDir,
-                    filename: model.filename,
-                    preview_path: model.previewPath || null,
-                    preview_url: model.previewPath ? `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint` : null,
-                    metadata_status: metadata ? (metadata._complete ? 'complete' : 'partial') : 'none',
-                    metadata_source: metadata?._json_source || (metadata?._has_embedded ? 'embedded' : 'none'),
-                    has_embedded_metadata: metadata?._has_embedded || false
-                };
-                
-                // Step 3.5: Handle preview images (Phase 5 from plan)
-                if (!model.previewPath) {
-                    // Check for *.preview.jpeg files ONLY (per rule #1)
-                    const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
-                    const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
-                    try {
-                        await fs.access(previewPath);
-                        modelData.preview_path = previewPath;
-                        modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                    } catch (err) {
-                        // No local preview image found - will download later after hash determination
-                        modelData.preview_path = null;
-                    }
-                }
-                
-                // Extract metadata fields if available
-                if (metadata) {
-                    // Helper function to safely convert complex values to strings for SQLite
-                    const toSafeValue = (value) => {
-                        if (value === null || value === undefined) return null;
-                        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-                        if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
-                        return String(value);
-                    };
-                    
-                    // Handle different hash field names from different sources
-                    const hash_autov2 = metadata.hash_autov2 || metadata.AutoV2 || null;
-                    const hash_sha256 = metadata.hash_sha256 || metadata.SHA256 || metadata.sha256 || null;
-                    
-                    // Extract type from metadata (Priority Order per Rule #3)
-                    let extractedType = null;
-                    
-                    // Priority 1: Direct type field (Forge/Civitai JSON)
-                    if (metadata.type) {
-                        extractedType = metadata.type.toLowerCase();
-                    } else if (metadata.model?.type) {
-                        extractedType = metadata.model.type.toLowerCase();
-                    }
-                    // Priority 2: Civitai model type
-                    else if (metadata.civitai_model_type) {
-                        extractedType = metadata.civitai_model_type.toLowerCase();
-                    }
-                    // Priority 3: Embedded metadata architecture 
-                    else if (metadata['modelspec.architecture']) {
-                        const architecture = metadata['modelspec.architecture'];
-                        if (architecture && typeof architecture === 'string') {
-                            if (architecture.includes('/lora') || architecture.includes('lora')) {
-                                extractedType = 'lora';
-                            } else if (architecture.includes('/checkpoint') || architecture.includes('checkpoint')) {
-                                extractedType = 'checkpoint';
-                            }
-                        }
-                    }
-                    
-                    // Normalize type values
-                    if (extractedType) {
-                        if (extractedType.includes('lora') || extractedType === 'lora') {
-                            modelData.type = 'lora';
-                        } else if (extractedType.includes('checkpoint') || extractedType === 'checkpoint') {
-                            modelData.type = 'checkpoint';
-                        }
-                    }
-                    
-                    // Add all metadata fields (handle both Civitai and Forge formats)
-                    Object.assign(modelData, {
-                        hash_autov2: hash_autov2,
-                        hash_sha256: hash_sha256,
-                        civitai_id: toSafeValue(metadata.modelId || metadata.model?.id),
-                        civitai_version_id: toSafeValue(metadata.modelVersionId || metadata.model?.modelVersionId),
-                        civitai_model_name: toSafeValue(metadata.name || metadata.model?.name),
-                        civitai_model_base: toSafeValue(metadata.baseModel || metadata.model?.baseModel || metadata['sd version']),
-                        civitai_model_type: toSafeValue(metadata.type || metadata.model?.type),
-                        civitai_model_version_name: toSafeValue(metadata.versionName || metadata.name),
-                        civitai_model_version_desc: toSafeValue(metadata.description || metadata.model?.description || metadata.notes),
-                        civitai_model_version_date: toSafeValue(metadata.createdAt || metadata.model?.createdAt),
-                        civitai_download_url: toSafeValue(metadata.downloadUrl || metadata.model?.downloadUrl),
-                        civitai_trained_words: toSafeValue(getEnhancedActivationText(metadata) || metadata['activation text']),
-                        civitai_file_size_kb: toSafeValue(metadata.fileSizeKB || metadata['preferred weight']),
-                        civitai_nsfw: metadata.model?.nsfw || metadata.nsfw || false
-                    });
-                }
-                
-                // Step 4: Hash-only duplicate detection (per plan)
-                let existingModel = null;
-                let skipModel = false;
-                
-                // First, check if model already exists in database by filename/path
-                const existingByPath = modelDB.findModelByPath(model.filename, model.local_path);
-                if (existingByPath && (existingByPath.hash_autov2 || existingByPath.hash_sha256)) {
-                    // Use existing model's hash for duplicate detection
-                    modelData.hash_autov2 = existingByPath.hash_autov2;
-                    modelData.hash_sha256 = existingByPath.hash_sha256;
-                    console.log(`[ModelScan] Using existing hash for ${model.filename}: ${existingByPath.hash_autov2 || existingByPath.hash_sha256}`);
-                }
-                
-                // Step 4.5: Calculate hashes if requested and missing (per revised workflow)
-                if (calculateHashes) {
-                    await calculateMissingHashes(modelData, model, stats);
-                }
-                
-                // Step 4.6: Fetch Civitai metadata if we have AutoV2 hash but missing metadata
-                // Skip if already marked as 'none' (404 from previous scan)
-                if (modelData.hash_autov2 && 
-                    (!modelData.civitai_model_name || !modelData.metadata_source || modelData.metadata_source === 'none') &&
-                    modelData.civitai_model_name !== 'none') {
-                    try {
-                        console.log(`[ModelScan] Fetching Civitai metadata for ${model.filename} using AutoV2 hash ${modelData.hash_autov2}`);
-                        
-                        const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${modelData.hash_autov2}`);
-                        const modelVersion = hashResponse.data;
-                        
-                        if (modelVersion) {
-                            console.log(`[ModelScan] Found Civitai metadata for ${model.filename}: ${modelVersion.model?.name || 'Unknown'}`);
-                            
-                            // Extract and store Civitai metadata (only update null fields per scanning rules)
-                            if (!modelData.civitai_id && (modelVersion.modelId || modelVersion.model?.id)) {
-                                modelData.civitai_id = modelVersion.modelId || modelVersion.model.id;
-                            }
-                            if (!modelData.civitai_version_id && modelVersion.id) {
-                                modelData.civitai_version_id = modelVersion.id;
-                            }
-                            if (!modelData.civitai_model_name && modelVersion.model?.name) {
-                                modelData.civitai_model_name = modelVersion.model.name;
-                            }
-                            if (!modelData.civitai_model_base && modelVersion.baseModel) {
-                                modelData.civitai_model_base = modelVersion.baseModel;
-                            }
-                            if (!modelData.civitai_model_type && modelVersion.model?.type) {
-                                modelData.civitai_model_type = modelVersion.model.type;
-                            }
-                            if (!modelData.civitai_model_version_name && modelVersion.name) {
-                                modelData.civitai_model_version_name = modelVersion.name;
-                            }
-                            if (!modelData.civitai_model_version_desc && modelVersion.description) {
-                                modelData.civitai_model_version_desc = modelVersion.description;
-                            }
-                            if (!modelData.civitai_model_version_date && modelVersion.createdAt) {
-                                modelData.civitai_model_version_date = modelVersion.createdAt;
-                            }
-                            if (!modelData.civitai_download_url && modelVersion.downloadUrl) {
-                                modelData.civitai_download_url = modelVersion.downloadUrl;
-                            }
-                            if (!modelData.civitai_trained_words && modelVersion.trainedWords) {
-                                modelData.civitai_trained_words = JSON.stringify(modelVersion.trainedWords);
-                            }
-                            if (!modelData.civitai_nsfw && modelVersion.model?.nsfw) {
-                                modelData.civitai_nsfw = modelVersion.model.nsfw;
-                            }
-                            if (!modelData.civitai_blurhash && modelVersion.images?.[0]?.hash) {
-                                modelData.civitai_blurhash = modelVersion.images[0].hash;
-                            }
-                            
-                            // Update metadata source if we got data from Civitai
-                            if (!modelData.metadata_source || modelData.metadata_source === 'none') {
-                                modelData.metadata_source = 'civitai';
-                                modelData.metadata_status = 'complete';
-                            }
-                        } else {
-                            console.log(`[ModelScan] No Civitai metadata found for hash ${modelData.hash_autov2}`);
-                        }
-                    } catch (metadataError) {
-                        console.warn(`[ModelScan] Failed to fetch Civitai metadata for ${model.filename}:`, metadataError.message);
-                        
-                        // If 404 error, mark Civitai-specific fields as 'none' to prevent future API calls
-                        if (metadataError.message.includes('404') || (metadataError.response && metadataError.response.status === 404)) {
-                            console.log(`[ModelScan] Model ${model.filename} not found on Civitai (404) - marking Civitai fields as 'none'`);
-                            
-                            // Only set to 'none' if field is currently null (don't overwrite existing data)
-                            if (!modelData.civitai_id) modelData.civitai_id = 'none';
-                            if (!modelData.civitai_version_id) modelData.civitai_version_id = 'none';
-                            if (!modelData.civitai_model_name) modelData.civitai_model_name = 'none';
-                            if (!modelData.civitai_model_base) modelData.civitai_model_base = 'none';
-                            if (!modelData.civitai_model_type) modelData.civitai_model_type = 'none';
-                            if (!modelData.civitai_model_version_name) modelData.civitai_model_version_name = 'none';
-                            if (!modelData.civitai_model_version_desc) modelData.civitai_model_version_desc = 'none';
-                            if (!modelData.civitai_model_version_date) modelData.civitai_model_version_date = 'none';
-                            if (!modelData.civitai_download_url) modelData.civitai_download_url = 'none';
-                            if (!modelData.civitai_trained_words) modelData.civitai_trained_words = 'none';
-                            if (!modelData.civitai_blurhash) modelData.civitai_blurhash = 'none';
-                            // Note: civitai_nsfw is boolean, leave as false for 404s
-                            
-                            // Mark metadata as checked but not found
-                            if (!modelData.metadata_source || modelData.metadata_source === 'none') {
-                                modelData.metadata_source = 'none';
-                                modelData.metadata_status = 'none';
-                            }
-                        }
-                    }
-                }
-                
-                // Step 4.75: Try to download preview image if we have a hash but no local preview
-                // Skip if we already know model isn't on Civitai (marked as 'none' from 404)
-                if (!modelData.preview_path && modelData.hash_autov2 && modelData.civitai_model_name !== 'none') {
-                    const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
-                    const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
-                    const autoV2Hash = modelData.hash_autov2;
-                    
-                    // Double-check if preview file exists before making API call
-                    try {
-                        await fs.access(previewPath);
-                        // Preview file exists, use it
-                        modelData.preview_path = previewPath;
-                        modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                        console.log(`[ModelScan] Found existing preview image: ${previewPath}`);
-                    } catch (accessError) {
-                        // Preview doesn't exist, try to download from Civitai
-                        try {
-                            console.log(`[ModelScan] Attempting to download preview for ${model.filename} using AutoV2 hash ${autoV2Hash}`);
-                            
-                            // Use Civitai hash-based lookup
-                            const hashResponse = await rateLimitedCivitaiRequest(`${CIVITAI_API_BASE}/model-versions/by-hash/${autoV2Hash}`);
-                            const modelVersion = hashResponse.data;
-                            
-                            if (modelVersion && modelVersion.images && modelVersion.images.length > 0) {
-                                // Download preview image
-                                const previewUrl = modelVersion.images[0].url;
-                                console.log(`[ModelScan] Downloading preview image from: ${previewUrl}`);
-                                
-                                // Download the image
-                                const imageResponse = await rateLimitedCivitaiRequest(previewUrl, { responseType: 'arraybuffer' });
-                                const imageData = imageResponse.data;
-                                
-                                // Save as *.preview.jpeg (exact format per Rule #1)
-                                await fs.writeFile(previewPath, imageData);
-                                console.log(`[ModelScan] Downloaded preview image to ${previewPath}`);
-                                
-                                modelData.preview_path = previewPath;
-                                modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                            } else {
-                                console.log(`[ModelScan] No preview images available for hash ${autoV2Hash} - generating placeholder`);
-                                // Generate placeholder when no images are available on Civitai
-                                try {
-                                    await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
-                                    
-                                    modelData.preview_path = previewPath;
-                                    modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                                    console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
-                                } catch (placeholderError) {
-                                    console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
-                                }
-                            }
-                        } catch (downloadError) {
-                            console.warn(`[ModelScan] Failed to download preview for ${model.filename} using hash ${modelData.hash_autov2}:`, downloadError.message);
-                            
-                            // Generate placeholder image for 404 errors only (model not found on Civitai)
-                            // Other errors (network, rate limits) should allow retry on next scan
-                            if (downloadError.message.includes('404') || (downloadError.response && downloadError.response.status === 404)) {
-                                try {
-                                    console.log(`[ModelScan] Generating placeholder preview for ${model.filename} (404 - not found on Civitai)`);
-                                    await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
-                                    
-                                    modelData.preview_path = previewPath;
-                                    modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                                    console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
-                                } catch (placeholderError) {
-                                    console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
-                                }
-                            }
-                        }
-                    }
-                } else if (!modelData.preview_path && modelData.hash_autov2 && modelData.civitai_model_name === 'none') {
-                    // Model is known to not exist on Civitai, generate placeholder
-                    const baseName = model.filename.substring(0, model.filename.lastIndexOf('.'));
-                    const previewPath = path.join(modelDir, `${baseName}.preview.jpeg`);
-                    
-                    try {
-                        console.log(`[ModelScan] Model ${model.filename} not on Civitai - generating placeholder preview`);
-                        await generatePlaceholderPreview(model.filename, modelData.type, previewPath);
-                        
-                        modelData.preview_path = previewPath;
-                        modelData.preview_url = `/api/v1/models/${encodeURIComponent(model.filename)}/preview?type=checkpoint`;
-                        console.log(`[ModelScan] Generated placeholder preview: ${previewPath}`);
-                    } catch (placeholderError) {
-                        console.error(`[ModelScan] Failed to generate placeholder for ${model.filename}:`, placeholderError.message);
-                    }
-                } else if (!modelData.preview_path) {
-                    console.log(`[ModelScan] No AutoV2 hash for ${model.filename} - skipping preview download`);
-                }
-                
-                // Now check for duplicates using hash (hash-only detection)
-                // Per scanning rules: same hash + same path = update, same hash + different path = skip
-                if (modelData.hash_autov2) {
-                    const hashMatches = modelDB.findModelsByHash(modelData.hash_autov2, 'autov2');
-                    if (hashMatches.length > 0) {
-                        const hashMatch = hashMatches[0];
-                        // Check if it's the same path (update) or different path (skip)
-                        if (hashMatch.filename === model.filename && hashMatch.local_path === model.local_path) {
-                            // Same path: Update null fields with new metadata (per scanning rules)
-                            existingModel = hashMatch;
-                            skipModel = false; // Don't skip - we want to update
-                        } else {
-                            // Different path: Skip as duplicate (per scanning rules)
-                            existingModel = hashMatch;
-                            skipModel = true;
-                        }
-                    }
-                } else if (modelData.hash_sha256) {
-                    const hashMatches = modelDB.findModelsByHash(modelData.hash_sha256, 'sha256');
-                    if (hashMatches.length > 0) {
-                        const hashMatch = hashMatches[0];
-                        // Check if it's the same path (update) or different path (skip)
-                        if (hashMatch.filename === model.filename && hashMatch.local_path === model.local_path) {
-                            // Same path: Update null fields with new metadata (per scanning rules)
-                            existingModel = hashMatch;
-                            skipModel = false; // Don't skip - we want to update
-                        } else {
-                            // Different path: Skip as duplicate (per scanning rules)
-                            existingModel = hashMatch;
-                            skipModel = true;
-                        }
-                    }
-                }
-                // If no hash available → treat as new model (per plan)
-                
-                // Step 5: Database operation
-                if (skipModel) {
-                    // Model already exists (by hash), skip it
-                    stats.skipped++;
-                } else {
-                    // Always add model if no hash duplicate found
-                    // Use addOrUpdateModel but it will handle its own duplicate detection
-                    try {
-                        const modelId = modelDB.addOrUpdateModel(modelData);
-                        const serverId = req.headers['x-server-id'] || 'local';
-                        modelDB.updateModelServerAvailability(modelId, serverId);
-                        stats.added++;
-                        
-                        // Log progress every 50 models
-                        if (stats.added % 50 === 0) {
-                            console.log(`[ModelScan] Progress: ${stats.added} models added so far...`);
-                        }
-                    } catch (dbError) {
-                        console.error(`[ModelScan] Database error for ${model.filename}:`, dbError.message);
-                        stats.errors++;
-                    }
-                }
-                
-            } catch (error) {
-                console.error(`[ModelScan] Error processing ${model.filename}:`, error.message);
-                stats.errors++;
-            }
+        // Set up path info for each model
+        allModels.forEach(model => {
+            model.local_path = path.join(modelPath, model.relativePath || '');
+        });
+        
+        // Use shared processing function
+        const stats = await processModels(allModels, { modelPath });
+        
+        // Check if scan was cancelled
+        if (stats.cancelled) {
+            logScanPhase('SCAN_CANCELLED', stats);
+            
+            res.json({
+                success: true,
+                stats,
+                cancelled: true,
+                message: stats.message || 'Scan was stopped by user'
+            });
+            return;
         }
         
         logScanPhase('SCAN_COMPLETE', stats);
@@ -1195,10 +1529,16 @@ router.post('/models/scan', async (req, res) => {
         const finalCount = modelDB.getAllModels().length;
         console.log(`[ModelScan] Database count after scan: ${finalCount} models`);
         
+        // Include duplicate info in response message
+        let message = `Scan processed ${stats.total} models: ${stats.added} added, ${stats.updated} updated, ${stats.refreshed} refreshed, ${stats.skipped} skipped, ${stats.errors} errors. Database now has ${finalCount} models.`;
+        if (stats.duplicates && stats.duplicates.count > 0) {
+            message += ` Found ${stats.duplicates.count} groups of duplicate files (see console for details).`;
+        }
+
         res.json({
             success: true,
             stats,
-            message: `Scan processed ${stats.total} models: ${stats.added} added, ${stats.skipped} skipped, ${stats.errors} errors. Database now has ${finalCount} models.`
+            message
         });
         
     } catch (error) {
@@ -1521,6 +1861,59 @@ function determineBaseModelFromFilename(filename) {
     // Default to the most common
     return 'SD 1.5';
 }
+
+/**
+ * POST /api/v1/models/scan/stop
+ * Stops the currently running model scan
+ */
+router.post('/models/scan/stop', async (req, res) => {
+    try {
+        console.log('[ModelScan] Stop scan requested');
+        
+        // Set the cancellation flag
+        SCAN_CANCELLED = true;
+        
+        console.log('[ModelScan] Scan cancellation flag set');
+        
+        res.json({
+            success: true,
+            message: 'Scan stop request received'
+        });
+        
+    } catch (error) {
+        console.error('Error stopping scan:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to stop scan',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/v1/models/cleanup-duplicates
+ * Clean up stale duplicate markings for models that are now unique
+ */
+router.post('/models/cleanup-duplicates', async (req, res) => {
+    try {
+        console.log('[Models] Manual duplicate cleanup requested');
+        
+        const clearedCount = await cleanupStaleDuplicateMarkings();
+        
+        res.json({
+            success: true,
+            message: `Cleaned up duplicate markings for ${clearedCount} models that are now unique`,
+            clearedCount: clearedCount
+        });
+    } catch (error) {
+        console.error('Error cleaning up duplicate markings:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to clean up duplicate markings',
+            error: error.message
+        });
+    }
+});
 
 /**
  * POST /api/v1/models/:id/availability
@@ -2034,6 +2427,85 @@ router.get('/models/:id/hash-info', async (req, res) => {
 });
 
 /**
+ * POST /api/v1/models/:id/rescan
+ * Rescans a single model file and updates its database entry
+ */
+router.post('/models/:id/rescan', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const options = req.body || {};
+        
+        console.log(`[SingleRescan] Starting rescan for model ID: ${modelId}`);
+        console.log(`[SingleRescan] Options:`, options);
+        
+        // Get the model from database
+        const existingModel = modelDB.getAllModels().find(m => m.id == modelId);
+        if (!existingModel) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found in database'
+            });
+        }
+        
+        console.log(`[SingleRescan] Found model: ${existingModel.filename}`);
+        
+        // Construct full file path
+        const fullPath = path.join(existingModel.local_path, existingModel.filename);
+        
+        // Check if file exists
+        try {
+            await fs.access(fullPath);
+        } catch (err) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model file not found on disk'
+            });
+        }
+        
+        // Create a model object for processing (compatible with processModels function)
+        const model = {
+            filename: existingModel.filename,
+            local_path: existingModel.local_path,
+            relativePath: '', // Single file, no relative path needed
+            previewPath: existingModel.preview_path
+        };
+        
+        // Use the shared processModels function with single model array
+        const stats = await processModels([model], {
+            getPreview: options.getPreview || false,
+            generateHash: options.generateHash || false,
+            retrieveFromCivitai: options.retrieveFromCivitai || false,
+            skipDuplicateDetection: true // Skip duplicate detection for single rescan
+        });
+        
+        // Return success response
+        res.json({
+            success: true,
+            message: 'Model rescanned successfully',
+            model: {
+                id: existingModel.id,
+                filename: model.filename,
+                updated: stats.updated > 0 || stats.added > 0
+            },
+            stats: stats,
+            operations: {
+                hashCalculated: stats.hashesCalculated > 0,
+                civitaiDataFetched: stats.updated > 0 || stats.added > 0, // Assume Civitai was called if model was updated
+                previewDownloaded: stats.updated > 0 || stats.added > 0 // Assume preview was handled if model was updated
+            }
+        });
+        
+    } catch (error) {
+        console.error('[SingleRescan] Error rescanning model:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to rescan model',
+            error: error.message
+        });
+    }
+});
+
+/**
  * Generate a simple text-based placeholder preview image
  * @param {string} filename - Model filename
  * @param {string} modelType - Model type (checkpoint, lora, vae, etc.)
@@ -2171,6 +2643,266 @@ function getModelTypeInfo(filename, modelType) {
             iconColor: '#ffffff',
             icon: '❓'
         };
+    }
+}
+
+/**
+ * DELETE /api/v1/models/delete-from-disk
+ * Deletes a model file and its associated files from disk
+ * Body should contain: { local_path: string, filename: string }
+ */
+router.delete('/models/delete-from-disk', async (req, res) => {
+    try {
+        const { local_path, filename } = req.body;
+        
+        if (!local_path || !filename) {
+            return res.status(400).json({
+                success: false,
+                message: 'Both local_path and filename are required'
+            });
+        }
+        
+        // Find model by path and filename combination (unique identifier)
+        const models = modelDB.getAllModels();
+        const model = models.find(m => m.local_path === local_path && m.filename === filename);
+        
+        if (!model) {
+            return res.status(404).json({
+                success: false,
+                message: `Model not found in database with path: ${local_path} and filename: ${filename}`
+            });
+        }
+
+        console.log(`[DeleteModel] Deleting model: ${filename} from ${local_path} (Found DB ID: ${model.id})`);
+        
+        const filesToDelete = [];
+        const errors = [];
+        
+        // 1. Main model file
+        const modelPath = path.join(model.local_path, model.filename);
+        filesToDelete.push({ path: modelPath, type: 'model file' });
+        
+        // 2. Preview image (using various possible extensions)
+        const modelBasename = model.filename.substring(0, model.filename.lastIndexOf('.'));
+        const previewExtensions = ['.preview.jpeg', '.preview.jpg', '.preview.png', '.jpeg', '.jpg', '.png'];
+        for (const ext of previewExtensions) {
+            const previewPath = path.join(model.local_path, modelBasename + ext);
+            try {
+                await fs.access(previewPath);
+                filesToDelete.push({ path: previewPath, type: 'preview image' });
+                break; // Only delete the first found preview
+            } catch (err) {
+                // Preview doesn't exist, continue
+            }
+        }
+        
+        // 3. JSON metadata files
+        const jsonExtensions = ['.json', '.civitai.json'];
+        for (const ext of jsonExtensions) {
+            const jsonPath = path.join(model.local_path, modelBasename + ext);
+            try {
+                await fs.access(jsonPath);
+                filesToDelete.push({ path: jsonPath, type: 'metadata file' });
+            } catch (err) {
+                // JSON doesn't exist, continue
+            }
+        }
+
+        // Delete files
+        const deletedFiles = [];
+        for (const file of filesToDelete) {
+            try {
+                await fs.unlink(file.path);
+                deletedFiles.push(file);
+                console.log(`[DeleteModel] Deleted ${file.type}: ${file.path}`);
+            } catch (err) {
+                const error = `Failed to delete ${file.type}: ${file.path} - ${err.message}`;
+                errors.push(error);
+                console.error(`[DeleteModel] ${error}`);
+            }
+        }
+
+        // Remove from database if model file was successfully deleted
+        const modelFileDeleted = deletedFiles.some(f => f.type === 'model file');
+        if (modelFileDeleted) {
+            try {
+                // Re-verify the model still exists in database using path/filename (the unique identifier)
+                const verifyModel = modelDB.getAllModels().find(m => 
+                    m.local_path === local_path && m.filename === filename
+                );
+                
+                if (!verifyModel) {
+                    throw new Error(`Model not found in database during verification with path: ${local_path} and filename: ${filename}`);
+                }
+                
+                console.log(`[DeleteModel] Verified database entry exists - Path: ${local_path}, Filename: ${filename}, ID: ${verifyModel.id}`);
+                
+                // Delete the database entry using the verified model's ID
+                modelDB.deleteModel(verifyModel.id);
+                console.log(`[DeleteModel] Removed model from database: ${filename} (ID: ${verifyModel.id})`);
+            } catch (err) {
+                errors.push(`Failed to remove model from database: ${err.message}`);
+                console.error(`[DeleteModel] Failed to remove from database: ${err.message}`);
+            }
+        }
+
+        // Return response
+        if (deletedFiles.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No files were deleted',
+                errors: errors
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `Successfully deleted ${deletedFiles.length} file(s)`,
+            deletedFiles: deletedFiles.map(f => ({ type: f.type, path: path.basename(f.path) })),
+            errors: errors.length > 0 ? errors : undefined,
+            modelRemovedFromDatabase: modelFileDeleted
+        });
+
+    } catch (error) {
+        console.error('[DeleteModel] Error deleting model:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete model',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * PUT /api/v1/models/update-field
+ * Updates a specific field for a model identified by path and filename
+ * Body should contain: { local_path: string, filename: string, field: string, value: any }
+ */
+router.put('/models/update-field', async (req, res) => {
+    try {
+        const { local_path, filename, field, value } = req.body;
+        
+        if (!local_path || !filename || !field) {
+            return res.status(400).json({
+                success: false,
+                message: 'local_path, filename, and field are required'
+            });
+        }
+        
+        // Find model by path and filename combination (unique identifier)
+        const models = modelDB.getAllModels();
+        const model = models.find(m => m.local_path === local_path && m.filename === filename);
+        
+        if (!model) {
+            return res.status(404).json({
+                success: false,
+                message: `Model not found in database with path: ${local_path} and filename: ${filename}`
+            });
+        }
+        
+        // Validate field is allowed to be updated
+        const allowedFields = ['civitai_nsfw']; // Add more fields as needed
+        if (!allowedFields.includes(field)) {
+            return res.status(400).json({
+                success: false,
+                message: `Field '${field}' is not allowed to be updated. Allowed fields: ${allowedFields.join(', ')}`
+            });
+        }
+        
+        console.log(`[UpdateModel] Updating ${field} for model: ${filename} from ${local_path} to value: ${value}`);
+        
+        // Update the model in the database
+        try {
+            const updatedModel = { ...model, [field]: value };
+            const modelId = modelDB.addOrUpdateModel(updatedModel);
+            
+            console.log(`[UpdateModel] Successfully updated ${field} for model: ${filename} (ID: ${modelId})`);
+            
+            res.json({
+                success: true,
+                message: `Successfully updated ${field}`,
+                model: {
+                    id: modelId,
+                    filename: filename,
+                    [field]: value
+                }
+            });
+            
+        } catch (updateError) {
+            throw new Error(`Failed to update model in database: ${updateError.message}`);
+        }
+        
+    } catch (error) {
+        console.error('[UpdateModel] Error updating model field:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update model field',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Clean up stale duplicate markings for models that are now unique
+ * This happens when a user manually deletes duplicate files from disk
+ * @returns {number} Number of models whose duplicate status was cleared
+ */
+async function cleanupStaleDuplicateMarkings() {
+    try {
+        const modelDB = require('../utils/modelDatabase');
+        
+        // Get all models currently marked as duplicates
+        const duplicateGroups = modelDB.getDuplicateModels();
+        let clearedCount = 0;
+        
+        // Check each duplicate group
+        for (const [hash, models] of Object.entries(duplicateGroups)) {
+            // Filter out models whose files no longer exist on disk
+            const existingModels = [];
+            
+            for (const model of models) {
+                const fullPath = path.join(model.local_path, model.filename);
+                try {
+                    await fs.access(fullPath);
+                    existingModels.push(model);
+                } catch (error) {
+                    // File doesn't exist anymore - this model was deleted
+                    console.log(`[ModelScan] File no longer exists: ${fullPath} (was duplicate ${model.duplicate_group_index}/${model.duplicate_group_size})`);
+                }
+            }
+            
+            // If only one model remains in the group, it's no longer a duplicate
+            if (existingModels.length === 1) {
+                const remainingModel = existingModels[0];
+                console.log(`[ModelScan] Clearing duplicate status for now-unique model: ${remainingModel.filename} (hash: ${hash})`);
+                
+                try {
+                    modelDB.clearModelDuplicateStatus(remainingModel.id);
+                    clearedCount++;
+                } catch (clearError) {
+                    console.error(`[ModelScan] Failed to clear duplicate status for model ID ${remainingModel.id}:`, clearError.message);
+                }
+            } else if (existingModels.length === 0) {
+                // All files in this duplicate group were deleted - nothing to clean up
+                console.log(`[ModelScan] All files in duplicate group ${hash} were deleted`);
+            } else if (existingModels.length < models.length) {
+                // Some files were deleted, but multiple still exist - update group indices
+                console.log(`[ModelScan] Updating duplicate group ${hash}: ${existingModels.length} files remain (was ${models.length})`);
+                
+                existingModels.forEach((model, index) => {
+                    try {
+                        modelDB.markModelAsDuplicate(model.id, hash, existingModels.length, index + 1);
+                    } catch (updateError) {
+                        console.error(`[ModelScan] Failed to update duplicate group index for model ID ${model.id}:`, updateError.message);
+                    }
+                });
+            }
+        }
+        
+        return clearedCount;
+    } catch (error) {
+        console.error('[ModelScan] Error cleaning up stale duplicate markings:', error.message);
+        return 0;
     }
 }
 

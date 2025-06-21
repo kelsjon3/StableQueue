@@ -283,14 +283,39 @@
                 <div class="button-group">
                     <button id="refresh-models-btn">Refresh Display</button>
                     <button id="scan-models-btn">Scan for New Models</button>
+                    <button id="stop-scan-btn" class="danger-button" style="display: none;">Stop Scan</button>
+                    <button id="cleanup-duplicates-btn">Cleanup Duplicates</button>
                     <button id="reset-models-db-btn" class="danger-button">Reset Database</button>
                 </div>
-                <div class="scan-options">
-                    <label>
-                        <input type="checkbox" id="calculate-hashes-checkbox">
-                        Calculate hashes during scan (AutoV2, up to 15GB files, ~7.5min for large files)
-                    </label>
+
+                <!-- Scan Status Display -->
+                <div id="scan-status-container" class="scan-status-container" style="display: none;">
+                    <div class="scan-status-header">
+                        <h4>Model Scan in Progress</h4>
+                        <div class="scan-progress-bar">
+                            <div id="scan-progress-fill" class="scan-progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="scan-stats">
+                            <span id="scan-current-file">Initializing...</span>
+                            <span id="scan-progress-text">0 / 0 models processed</span>
+                        </div>
+                    </div>
+                    <div class="scan-status-details">
+                        <div class="scan-stats-row">
+                            <span>Added: <strong id="scan-added">0</strong></span>
+                            <span>Updated: <strong id="scan-updated">0</strong></span>
+                            <span>Refreshed: <strong id="scan-refreshed">0</strong></span>
+                            <span>Skipped: <strong id="scan-skipped">0</strong></span>
+                        </div>
+                        <div class="scan-stats-row">
+                            <span>Errors: <strong id="scan-errors">0</strong></span>
+                            <span>Hashes: <strong id="scan-hashes">0</strong></span>
+                            <span>Civitai Calls: <strong id="scan-civitai">0</strong></span>
+                            <span>Duplicates: <strong id="scan-duplicates">0</strong></span>
+                        </div>
+                    </div>
                 </div>
+
                 <div class="search-row">
                     <div class="search-container">
                         <input type="text" id="model-search-input" placeholder="Search models by name, type, or metadata..." class="search-input">
@@ -324,6 +349,13 @@
                             <option value="all">All</option>
                             <option value="complete">Complete</option>
                             <option value="incomplete">Incomplete</option>
+                        </select>
+                        
+                        <label for="model-duplicates-filter">Duplicates:</label>
+                        <select id="model-duplicates-filter">
+                            <option value="all">All</option>
+                            <option value="duplicates-only">Duplicates Only</option>
+                            <option value="unique-only">Unique Only</option>
                         </select>
                     </div>
                     
@@ -413,6 +445,7 @@
                         <div class="model-details-buttons">
                             <button id="model-details-ok-btn" class="primary-button">OK</button>
                             <button id="model-details-cancel-btn" class="secondary-button">Cancel</button>
+                            <button id="model-details-delete-btn" class="danger-button">Delete From Disk</button>
                         </div>
                     </div>
                 </div>

@@ -57,6 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentJobId = null; // Track the current job ID for the progress display
     let currentJob = null; // Track the current job object
     let jobClient = null; // Will hold the WebSocket client for job updates
+    let currentModelForDetails = null; // Track the current model being displayed in the details modal
 
     // Initialize the WebSocket client for real-time job updates
     function initializeJobClient() {
@@ -519,6 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeJobClient();
     setupGallerySearch();
     setupGalleryAutoRefresh();
+    setupScanWebSocketHandlers();
     // Start on queue view by default
     showView(queueView, navQueue);
     
@@ -1450,6 +1452,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const baseModelFilter = document.getElementById('model-base-filter')?.value || 'all';
             const availabilityFilter = document.getElementById('model-availability-filter')?.value || 'all';
             const metadataFilter = document.getElementById('model-metadata-filter')?.value || 'all';
+            const duplicatesFilter = document.getElementById('model-duplicates-filter')?.value || 'all';
             const searchTerm = document.getElementById('model-search-input')?.value.toLowerCase().trim() || '';
             
             // Filter models
@@ -1492,6 +1495,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 filtered = filtered.filter(model => {
                     const status = getMetadataStatus(model);
                     return status === metadataFilter;
+                });
+            }
+            
+            if (duplicatesFilter !== 'all') {
+                filtered = filtered.filter(model => {
+                    const isDuplicate = model.is_duplicate;
+                    if (duplicatesFilter === 'duplicates-only') {
+                        return isDuplicate;
+                    } else if (duplicatesFilter === 'unique-only') {
+                        return !isDuplicate;
+                    }
+                    return true; // 'all' case
                 });
             }
             
@@ -1569,7 +1584,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Get preview URL for the model
             const previewUrl = getModelPreviewUrl(model);
-            console.log(`Model: ${model.name}, Preview URL: ${previewUrl}`);
             
             // Get AutoV2 hash for display
             const hash = model.hash_autov2 || model.hash_sha256;
@@ -1580,16 +1594,23 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Set background image or fallback class
             if (previewUrl) {
-                console.log(`Setting background image for ${model.name}: ${previewUrl}`);
                 card.style.backgroundImage = `url(${previewUrl})`;
             } else {
-                console.log(`No preview image for ${model.name}, using fallback`);
                 card.classList.add('no-image');
             }
             
+            // Check if model is a duplicate
+            const isDuplicate = model.is_duplicate;
+            const duplicateIndicator = isDuplicate ? 
+                `<div class="duplicate-indicator" title="Duplicate Model (${model.duplicate_group_index}/${model.duplicate_group_size} in group ${model.duplicate_hash})">
+                    <span class="duplicate-icon">🔗</span>
+                    <span class="duplicate-count">${model.duplicate_group_index}/${model.duplicate_group_size}</span>
+                </div>` : '';
+
             // Create overlay content
             card.innerHTML = `
                 ${!previewUrl ? `<div class="model-placeholder-icon">${typeIcon}</div>` : ''}
+                ${duplicateIndicator}
                 <div class="model-card-overlay">
                     <h3 class="model-card-title" title="${safeName}">${highlightedName}</h3>
                     <div class="model-card-hash">${hashDisplay}</div>
@@ -1620,24 +1641,30 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to handle model scanning
     async function handleModelScan() {
         const scanBtn = document.getElementById('scan-models-btn');
+        const stopBtn = document.getElementById('stop-scan-btn');
         if (!scanBtn) return;
-        
-        // Get hash calculation option
-        const calculateHashesCheckbox = document.getElementById('calculate-hashes-checkbox');
-        const calculateHashes = calculateHashesCheckbox ? calculateHashesCheckbox.checked : false;
         
         scanBtn.disabled = true;
         const originalText = scanBtn.textContent;
-        scanBtn.textContent = calculateHashes ? 'Scanning + Calculating Hashes...' : 'Scanning...';
+        scanBtn.textContent = 'Scanning...';
+        scanBtn.style.display = 'none';
+        
+        // Show stop button
+        if (stopBtn) {
+            stopBtn.style.display = 'inline-block';
+            stopBtn.disabled = false;
+        }
+        
+        // Show scan status container
+        showScanStatus();
         
         try {
-            console.log('Starting model scan...', { calculateHashes });
+            console.log('Starting model scan...');
             const response = await fetch('/api/v1/models/scan', { 
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ calculateHashes })
+                }
             });
             
             if (!response.ok) {
@@ -1664,10 +1691,339 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Model scan failed:', error);
             alert('Scan failed: ' + error.message);
+            hideScanStatus();
         } finally {
             scanBtn.disabled = false;
             scanBtn.textContent = originalText;
+            scanBtn.style.display = 'inline-block';
+            
+            // Hide stop button
+            if (stopBtn) {
+                stopBtn.style.display = 'none';
+            }
         }
+    }
+
+    // Function to handle cleanup duplicates
+    async function handleCleanupDuplicates() {
+        const cleanupBtn = document.getElementById('cleanup-duplicates-btn');
+        if (!cleanupBtn) return;
+        
+        cleanupBtn.disabled = true;
+        const originalText = cleanupBtn.textContent;
+        cleanupBtn.textContent = 'Cleaning up...';
+        
+        try {
+            console.log('Starting duplicate cleanup...');
+            const response = await fetch('/api/v1/models/cleanup-duplicates', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log('Cleanup complete!', data);
+                
+                // Refresh models display to show updated duplicate status
+                await fetchAndDisplayModels();
+                
+                // Show success message
+                alert(`Cleanup complete! ${data.message}`);
+            } else {
+                throw new Error(data.message || 'Cleanup failed');
+            }
+        } catch (error) {
+            console.error('Duplicate cleanup failed:', error);
+            alert('Cleanup failed: ' + error.message);
+        } finally {
+            cleanupBtn.disabled = false;
+            cleanupBtn.textContent = originalText;
+        }
+    }
+
+    // Function to handle stopping a scan
+    async function handleStopScan() {
+        const stopBtn = document.getElementById('stop-scan-btn');
+        const scanBtn = document.getElementById('scan-models-btn');
+        
+        if (!stopBtn) return;
+        
+        stopBtn.disabled = true;
+        stopBtn.textContent = 'Stopping...';
+        
+        try {
+            console.log('Stopping model scan...');
+            const response = await fetch('/api/v1/models/scan/stop', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log('Scan stopped successfully');
+                
+                // Update scan display to show stopped state
+                const currentFileEl = document.getElementById('scan-current-file');
+                if (currentFileEl) {
+                    currentFileEl.textContent = 'Scan stopped by user';
+                }
+                
+                // Hide scan status after a delay
+                setTimeout(() => {
+                    hideScanStatus();
+                }, 2000);
+                
+            } else {
+                throw new Error(data.message || 'Failed to stop scan');
+            }
+        } catch (error) {
+            console.error('Failed to stop scan:', error);
+            alert('Failed to stop scan: ' + error.message);
+        } finally {
+            // Restore button states
+            stopBtn.disabled = false;
+            stopBtn.textContent = 'Stop Scan';
+            stopBtn.style.display = 'none';
+            
+            if (scanBtn) {
+                scanBtn.disabled = false;
+                scanBtn.textContent = 'Scan for New Models';
+                scanBtn.style.display = 'inline-block';
+            }
+        }
+    }
+
+    // Scan status display functions
+    function showScanStatus() {
+        const container = document.getElementById('scan-status-container');
+        if (container) {
+            container.style.display = 'block';
+            resetScanDisplay();
+            
+            // Reset progress bar animation for new scan
+            const progressFill = document.getElementById('scan-progress-fill');
+            if (progressFill) {
+                progressFill.style.animation = '';
+            }
+        }
+    }
+
+    function hideScanStatus() {
+        const container = document.getElementById('scan-status-container');
+        if (container) {
+            container.style.display = 'none';
+            // Remove click handlers when hiding
+            container.removeEventListener('click', handleScanStatusClick);
+            document.removeEventListener('click', handleOutsideClick);
+        }
+    }
+
+    function resetScanDisplay() {
+        updateScanProgress({ current: 0, total: 0, currentFile: 'Initializing...', stats: {
+            added: 0, updated: 0, refreshed: 0, skipped: 0, errors: 0, hashesCalculated: 0, civitaiCalls: 0
+        }});
+    }
+
+    function makeScanStatusDismissible() {
+        const container = document.getElementById('scan-status-container');
+        if (!container) return;
+
+        // Add visual indication that it's clickable
+        container.style.cursor = 'pointer';
+        container.title = 'Click to dismiss';
+        
+        // Add a dismiss message to the scan status
+        const currentFileEl = document.getElementById('scan-current-file');
+        if (currentFileEl && currentFileEl.textContent === 'Scan Complete!') {
+            currentFileEl.textContent = 'Scan Complete! (Click to dismiss)';
+        }
+
+        // Add click handler to the container
+        container.addEventListener('click', handleScanStatusClick);
+        
+        // Add click handler to document for outside clicks
+        setTimeout(() => {
+            document.addEventListener('click', handleOutsideClick);
+        }, 100); // Small delay to prevent immediate dismissal
+    }
+
+    function handleScanStatusClick(event) {
+        event.stopPropagation();
+        hideScanStatus();
+    }
+
+    function handleOutsideClick(event) {
+        const container = document.getElementById('scan-status-container');
+        if (container && !container.contains(event.target) && container.style.display !== 'none') {
+            hideScanStatus();
+        }
+    }
+
+    function updateScanProgress(progress) {
+        // Update progress bar
+        const progressFill = document.getElementById('scan-progress-fill');
+        if (progressFill) {
+            const percentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+            progressFill.style.width = `${percentage}%`;
+            
+            // Stop animation when scan is complete
+            if (percentage >= 100) {
+                progressFill.style.animation = 'none';
+            }
+        }
+
+        // Update current file
+        const currentFileEl = document.getElementById('scan-current-file');
+        if (currentFileEl) {
+            const currentFile = progress.currentFile || 'Processing...';
+            currentFileEl.textContent = currentFile;
+            currentFileEl.title = currentFile; // Show full filename on hover
+        }
+
+        // Update progress text
+        const progressTextEl = document.getElementById('scan-progress-text');
+        if (progressTextEl) {
+            progressTextEl.textContent = `${progress.current} / ${progress.total} models processed`;
+        }
+
+        // Update stats
+        if (progress.stats) {
+            const elements = {
+                'scan-added': progress.stats.added || 0,
+                'scan-updated': progress.stats.updated || 0,
+                'scan-refreshed': progress.stats.refreshed || 0,
+                'scan-skipped': progress.stats.skipped || 0,
+                'scan-errors': progress.stats.errors || 0,
+                'scan-hashes': progress.stats.hashesCalculated || 0,
+                'scan-civitai': progress.stats.civitaiCalls || 0,
+                'scan-duplicates': (progress.stats.duplicates && typeof progress.stats.duplicates === 'object') 
+                    ? (progress.stats.duplicates.count || 0) 
+                    : (progress.stats.duplicates || 0)
+            };
+
+            Object.entries(elements).forEach(([id, value]) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            });
+        }
+    }
+
+    // WebSocket scan event handlers
+    function setupScanWebSocketHandlers() {
+        if (jobClient) {
+            // Handle scan start
+            jobClient.socket.on('scan_start', () => {
+                console.log('[ScanClient] Scan started');
+                showScanStatus();
+            });
+
+            // Handle scan progress
+            jobClient.socket.on('scan_progress', (progress) => {
+                console.log('[ScanClient] Scan progress:', progress);
+                updateScanProgress(progress);
+            });
+
+            // Handle scan completion
+            jobClient.socket.on('scan_complete', (stats) => {
+                console.log('[ScanClient] Scan completed:', stats);
+                
+                // Final progress update
+                updateScanProgress({
+                    current: stats.total,
+                    total: stats.total,
+                    currentFile: 'Scan Complete!',
+                    stats: stats
+                });
+
+                // Show duplicates report if any duplicates were found
+                if (stats.duplicates && stats.duplicates.count > 0) {
+                    showDuplicatesReport(stats.duplicates);
+                }
+
+                // Refresh models but keep scan status visible
+                fetchAndDisplayModels();
+                
+                // Make the scan status container clickable to dismiss
+                makeScanStatusDismissible();
+            });
+        }
+    }
+
+    // Function to show duplicates report modal
+    function showDuplicatesReport(duplicatesData) {
+        console.log('[DuplicatesReport] Showing duplicates report:', duplicatesData);
+        
+        let reportHtml = `
+            <div class="duplicates-report-header">
+                <h3>🔍 Duplicate Models Report</h3>
+                <p>Found <strong>${duplicatesData.count} group${duplicatesData.count !== 1 ? 's' : ''}</strong> of duplicate files:</p>
+            </div>
+            <div class="duplicates-report-content">
+        `;
+        
+        duplicatesData.groups.forEach((group, index) => {
+            reportHtml += `
+                <div class="duplicate-group">
+                    <div class="duplicate-group-header">
+                        <strong>Group ${index + 1}</strong> 
+                        <span class="duplicate-hash">Hash: ${group.hash}</span>
+                    </div>
+                    <div class="duplicate-files">
+            `;
+            
+            // Show files found on disk
+            group.files.forEach(file => {
+                reportHtml += `
+                    <div class="duplicate-file">
+                        <span class="duplicate-filename">${file.filename}</span>
+                        <span class="duplicate-path">${file.path}</span>
+                        <span class="file-status file-status-found">📁 On Disk</span>
+                    </div>
+                `;
+            });
+            
+            // Show deleted database entries if any
+            if (group.deletedEntries && group.deletedEntries.length > 0) {
+                group.deletedEntries.forEach(deleted => {
+                    reportHtml += `
+                        <div class="duplicate-file deleted-entry">
+                            <span class="duplicate-filename">${deleted.filename}</span>
+                            <span class="duplicate-path">${deleted.path}</span>
+                            <span class="file-status file-status-deleted">🗑️ Database Entry Deleted (ID: ${deleted.id})</span>
+                            <div class="deletion-reason">${deleted.reason}</div>
+                        </div>
+                    `;
+                });
+            }
+            
+            reportHtml += `
+                    </div>
+                </div>
+            `;
+        });
+        
+        reportHtml += `
+            </div>
+            <div class="duplicates-report-footer">
+                <p><em>Note: These files have identical content (same hash) but are stored in different locations or with different names.</em></p>
+            </div>
+        `;
+        
+        showGenericModal('Duplicate Models Found', reportHtml);
     }
 
     // Function to handle Civitai fetch for individual models
@@ -1893,7 +2249,8 @@ document.addEventListener('DOMContentLoaded', () => {
             'model-type-filter',
             'model-base-filter',
             'model-availability-filter',
-            'model-metadata-filter'
+            'model-metadata-filter',
+            'model-duplicates-filter'
         ];
         
         filterIds.forEach(filterId => {
@@ -1947,6 +2304,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Setup models controls
         const refreshBtn = document.getElementById('refresh-models-btn');
         const scanBtn = document.getElementById('scan-models-btn');
+        const cleanupDuplicatesBtn = document.getElementById('cleanup-duplicates-btn');
         const resetDbBtn = document.getElementById('reset-models-db-btn');
         
         if (refreshBtn) {
@@ -1960,6 +2318,20 @@ document.addEventListener('DOMContentLoaded', () => {
             scanBtn.addEventListener('click', handleModelScan);
         } else {
             console.warn('Scan button not found');
+        }
+        
+        if (cleanupDuplicatesBtn) {
+            cleanupDuplicatesBtn.addEventListener('click', handleCleanupDuplicates);
+        } else {
+            console.warn('Cleanup duplicates button not found');
+        }
+
+        // Stop scan button
+        const stopScanBtn = document.getElementById('stop-scan-btn');
+        if (stopScanBtn) {
+            stopScanBtn.addEventListener('click', handleStopScan);
+        } else {
+            console.warn('Stop scan button not found');
         }
         
         if (resetDbBtn) {
@@ -2191,32 +2563,139 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="margin: 1rem 0;">
                 <div style="margin-bottom: 0.75rem;">
                     <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" style="margin-right: 0.5rem;"> Get Preview Image from Civitai
+                        <input type="checkbox" id="get-preview-checkbox" style="margin-right: 0.5rem;"> Get Preview Image from Civitai
                     </label>
                 </div>
                 <div style="margin-bottom: 0.75rem;">
                     <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" style="margin-right: 0.5rem;"> Generate Missing Hash
+                        <input type="checkbox" id="generate-hash-checkbox" style="margin-right: 0.5rem;"> Generate Missing Hash
                     </label>
                 </div>
                 <div style="margin-bottom: 0.75rem;">
                     <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" style="margin-right: 0.5rem;"> Rescan File
+                        <input type="checkbox" id="rescan-file-checkbox" style="margin-right: 0.5rem;"> Rescan File
                     </label>
                 </div>
                 <div style="margin-bottom: 0.75rem;">
                     <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" style="margin-right: 0.5rem;"> Retrieve Details From Civitai
+                        <input type="checkbox" id="retrieve-civitai-checkbox" style="margin-right: 0.5rem;"> Retrieve Details From Civitai
                     </label>
                 </div>
             </div>
             <div style="display: flex; justify-content: center; gap: 1rem; margin-top: 1.5rem;">
                 <button onclick="hideGenericModal()" style="padding: 0.5rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; cursor: pointer;">Cancel</button>
-                <button onclick="hideGenericModal()" style="padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">OK</button>
+                <button onclick="handleRetrieveDetailsSubmit('${modelId}')" style="padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">OK</button>
             </div>
         `;
         
         showGenericModal('Retrieve Missing Details', modalContent);
+    };
+
+    // Handle retrieve details form submission
+    window.handleRetrieveDetailsSubmit = async function(modelId) {
+        try {
+            // Get checkbox values
+            const getPreview = document.getElementById('get-preview-checkbox')?.checked || false;
+            const generateHash = document.getElementById('generate-hash-checkbox')?.checked || false;
+            const rescanFile = document.getElementById('rescan-file-checkbox')?.checked || false;
+            const retrieveCivitai = document.getElementById('retrieve-civitai-checkbox')?.checked || false;
+            
+            // If no options selected, just close the modal
+            if (!getPreview && !generateHash && !rescanFile && !retrieveCivitai) {
+                hideGenericModal();
+                return;
+            }
+            
+            // Close the modal first
+            hideGenericModal();
+            
+            // Show loading state
+            showGenericModal('Processing...', `
+                <div style="text-align: center; padding: 2rem;">
+                    <div style="margin-bottom: 1rem;">Processing your request...</div>
+                    <div style="font-size: 0.9rem; color: var(--text-secondary);">
+                        ${getPreview ? '• Getting preview image<br>' : ''}
+                        ${generateHash ? '• Generating missing hash<br>' : ''}
+                        ${rescanFile ? '• Rescanning file<br>' : ''}
+                        ${retrieveCivitai ? '• Retrieving Civitai details<br>' : ''}
+                    </div>
+                </div>
+            `);
+            
+            // Hide the close button for loading modal
+            const modal = document.getElementById('generic-modal');
+            const closeBtn = modal?.querySelector('.close-modal');
+            if (closeBtn) {
+                closeBtn.style.display = 'none';
+            }
+            
+            // Prepare request options
+            const options = {
+                getPreview: getPreview,
+                generateHash: generateHash,
+                retrieveFromCivitai: retrieveCivitai
+            };
+            
+            // If rescan file is selected, use the rescan endpoint
+            if (rescanFile) {
+                console.log(`Rescanning model ${modelId} with options:`, options);
+                const response = await fetch(`/api/v1/models/${modelId}/rescan`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(options)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    hideGenericModal();
+                    showGenericModal('Success', `
+                        <div style="text-align: center; padding: 1rem;">
+                            <div style="margin-bottom: 1rem; color: var(--success-color);">✓ Model rescanned successfully!</div>
+                            <div style="font-size: 0.9rem; color: var(--text-secondary);">
+                                ${result.operations.hashCalculated ? '• Hash calculated<br>' : ''}
+                                ${result.operations.civitaiDataFetched ? '• Civitai data retrieved<br>' : ''}
+                                ${result.operations.previewDownloaded ? '• Preview image downloaded<br>' : ''}
+                            </div>
+                            <button onclick="hideGenericModal(); fetchAndDisplayModels();" style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">Refresh Models</button>
+                        </div>
+                    `);
+                } else {
+                    hideGenericModal();
+                    showGenericModal('Error', `
+                        <div style="text-align: center; padding: 1rem;">
+                            <div style="margin-bottom: 1rem; color: var(--error-color);">✗ Failed to rescan model</div>
+                            <div style="font-size: 0.9rem; color: var(--text-secondary);">${result.message || 'Unknown error'}</div>
+                            <button onclick="hideGenericModal()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">OK</button>
+                        </div>
+                    `);
+                }
+            } else {
+                // For individual operations, we could implement separate endpoints
+                // For now, just show that the feature is not yet implemented
+                hideGenericModal();
+                showGenericModal('Info', `
+                    <div style="text-align: center; padding: 1rem;">
+                        <div style="margin-bottom: 1rem;">Individual operations are not yet implemented.</div>
+                        <div style="font-size: 0.9rem; color: var(--text-secondary);">Please use "Rescan File" to perform all operations together.</div>
+                        <button onclick="hideGenericModal()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">OK</button>
+                    </div>
+                `);
+            }
+            
+        } catch (error) {
+            console.error('Error handling retrieve details:', error);
+            hideGenericModal();
+            showGenericModal('Error', `
+                <div style="text-align: center; padding: 1rem;">
+                    <div style="margin-bottom: 1rem; color: var(--error-color);">✗ An error occurred</div>
+                    <div style="font-size: 0.9rem; color: var(--text-secondary);">${error.message}</div>
+                    <button onclick="hideGenericModal()" style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">OK</button>
+                </div>
+            `);
+        }
     };
 
     // Handle NSFW blur toggle
@@ -2248,6 +2727,9 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Modal elements not found');
             return;
         }
+        
+        // Store the current model for delete functionality
+        currentModelForDetails = model;
         
         // Set the model name
         title.textContent = model.name || model.filename || 'Unknown Model';
@@ -2285,6 +2767,163 @@ document.addEventListener('DOMContentLoaded', () => {
         if (modal) {
             modal.style.display = 'none';
         }
+        // Clear the current model reference
+        currentModelForDetails = null;
+    }
+    
+    // Function to handle OK button click in model details modal
+    function handleModelDetailsOk() {
+        if (!currentModelForDetails) {
+            hideModelDetailsModal();
+            return;
+        }
+        
+        const modal = document.getElementById('model-details-modal');
+        const nsfwSelect = modal.querySelector('.nsfw-select');
+        
+        if (nsfwSelect) {
+            const newNsfwValue = parseInt(nsfwSelect.value);
+            const originalNsfwValue = currentModelForDetails.civitai_nsfw ? 1 : 0;
+            
+            // Check if the value has changed
+            if (newNsfwValue !== originalNsfwValue) {
+                // Show loading state
+                const okBtn = document.getElementById('model-details-ok-btn');
+                if (okBtn) {
+                    okBtn.disabled = true;
+                    okBtn.textContent = 'Saving...';
+                }
+                
+                // Save the change
+                fetch('/api/v1/models/update-field', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        local_path: currentModelForDetails.local_path,
+                        filename: currentModelForDetails.filename,
+                        field: 'civitai_nsfw',
+                        value: newNsfwValue
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('NSFW field updated successfully');
+                        // Update the current model reference
+                        currentModelForDetails.civitai_nsfw = newNsfwValue;
+                        // Refresh the models display to show the change
+                        fetchAndDisplayModels();
+                        hideModelDetailsModal();
+                    } else {
+                        throw new Error(data.message || 'Failed to update NSFW field');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error updating NSFW field:', error);
+                    alert(`Failed to update NSFW field: ${error.message}`);
+                })
+                .finally(() => {
+                    // Restore button state
+                    if (okBtn) {
+                        okBtn.disabled = false;
+                        okBtn.textContent = 'OK';
+                    }
+                });
+            } else {
+                // No changes, just close the modal
+                hideModelDetailsModal();
+            }
+        } else {
+            // No editable fields, just close the modal
+            hideModelDetailsModal();
+        }
+    }
+    
+    // Function to handle model deletion from disk
+    function handleModelDeleteFromDisk() {
+        if (!currentModelForDetails) {
+            console.error('No model selected for deletion');
+            return;
+        }
+        
+        const model = currentModelForDetails;
+        const modelName = model.name || model.filename || 'Unknown Model';
+        
+        // Show confirmation dialog
+        const confirmed = confirm(
+            `This will delete the model from disk permanently along with supporting files.\n\n` +
+            `Model: ${modelName}\n` +
+            `Location: ${model.local_path}\n\n` +
+            `Files that will be deleted:\n` +
+            `• Model file: ${model.filename}\n` +
+            `• Preview image (if exists)\n` +
+            `• JSON metadata files (if exist)\n\n` +
+            `This action cannot be undone. Are you sure?`
+        );
+        
+        if (!confirmed) {
+            return;
+        }
+        
+        // Disable the delete button to prevent double-clicking
+        const deleteBtn = document.getElementById('model-details-delete-btn');
+        if (deleteBtn) {
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Deleting...';
+        }
+        
+        // Make the delete API call using path and filename as unique identifiers
+        fetch('/api/v1/models/delete-from-disk', {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                local_path: model.local_path,
+                filename: model.filename
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Show success message
+                let message = `Successfully deleted model: ${modelName}\n\n`;
+                message += `Deleted files:\n`;
+                data.deletedFiles.forEach(file => {
+                    message += `• ${file.type}: ${file.path}\n`;
+                });
+                
+                if (data.errors && data.errors.length > 0) {
+                    message += `\nWarnings/Errors:\n`;
+                    data.errors.forEach(error => {
+                        message += `• ${error}\n`;
+                    });
+                }
+                
+                alert(message);
+                
+                // Close the modal
+                hideModelDetailsModal();
+                
+                // Refresh the models display
+                fetchAndDisplayModels();
+            } else {
+                throw new Error(data.message || 'Failed to delete model');
+            }
+        })
+        .catch(error => {
+            console.error('Error deleting model:', error);
+            alert(`Failed to delete model: ${error.message}`);
+        })
+        .finally(() => {
+            // Re-enable the delete button
+            if (deleteBtn) {
+                deleteBtn.disabled = false;
+                deleteBtn.textContent = 'Delete From Disk';
+            }
+        });
     }
     
     // Function to populate model fields in the modal
@@ -2346,10 +2985,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'url':
                         valueDiv.textContent = value;
                         valueDiv.classList.add('url-value');
-                        valueDiv.addEventListener('click', () => window.open(value, '_blank'));
+                        // For Civitai download URL, show the model page instead
+                        if (field.key === 'civitai_download_url' && model.civitai_id) {
+                            const civitaiModelUrl = `https://civitai.com/models/${model.civitai_id}`;
+                            valueDiv.addEventListener('click', () => window.open(civitaiModelUrl, '_blank'));
+                        } else {
+                            valueDiv.addEventListener('click', () => window.open(value, '_blank'));
+                        }
                         break;
                     case 'boolean':
-                        valueDiv.textContent = value ? 'Yes' : 'No';
+                        // Special handling for NSFW field - make it editable
+                        if (field.key === 'civitai_nsfw') {
+                            const select = document.createElement('select');
+                            select.className = 'nsfw-select';
+                            select.innerHTML = `
+                                <option value="0" ${!value ? 'selected' : ''}>No</option>
+                                <option value="1" ${value ? 'selected' : ''}>Yes</option>
+                            `;
+                            valueDiv.appendChild(select);
+                        } else {
+                            valueDiv.textContent = value ? 'Yes' : 'No';
+                        }
                         break;
                     case 'date':
                         if (value) {
@@ -2397,13 +3053,18 @@ document.addEventListener('DOMContentLoaded', () => {
         // OK and Cancel buttons both close the modal for now
         const okBtn = document.getElementById('model-details-ok-btn');
         const cancelBtn = document.getElementById('model-details-cancel-btn');
+        const deleteBtn = document.getElementById('model-details-delete-btn');
         
         if (okBtn) {
-            okBtn.addEventListener('click', hideModelDetailsModal);
+            okBtn.addEventListener('click', handleModelDetailsOk);
         }
         
         if (cancelBtn) {
             cancelBtn.addEventListener('click', hideModelDetailsModal);
+        }
+        
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', handleModelDeleteFromDisk);
         }
     }
 });

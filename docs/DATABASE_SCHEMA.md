@@ -114,9 +114,14 @@ CREATE TABLE IF NOT EXISTS models (
     civitai_file_size_kb INTEGER,
     civitai_nsfw BOOLEAN DEFAULT FALSE,
     civitai_blurhash TEXT,
+    civitai_checked TEXT CHECK (civitai_checked IN ('found', 'not_found')),
     metadata_status TEXT NOT NULL DEFAULT 'incomplete' CHECK (metadata_status IN ('complete', 'partial', 'incomplete', 'none', 'error')),
     metadata_source TEXT DEFAULT 'none' CHECK (metadata_source IN ('forge', 'civitai', 'embedded', 'none')),
     has_embedded_metadata BOOLEAN DEFAULT FALSE,
+    is_duplicate BOOLEAN DEFAULT FALSE,
+    duplicate_hash TEXT,
+    duplicate_group_size INTEGER,
+    duplicate_group_index INTEGER,
     last_used TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -151,9 +156,14 @@ CREATE INDEX IF NOT EXISTS idx_models_hashes ON models (hash_autov2, hash_sha256
 - `civitai_file_size_kb`: File size in kilobytes
 - `civitai_nsfw`: Boolean flag indicating if the model contains NSFW content (from Civitai API)
 - `civitai_blurhash`: Blurhash string for preview image blur effect (from Civitai API)
+- `civitai_checked`: Civitai API check status ('found' = found on Civitai, 'not_found' = 404 from Civitai, null = not yet checked)
 - `metadata_status`: Status of metadata enrichment (complete, partial, incomplete, none, error)
 - `metadata_source`: Source of metadata (forge, civitai, embedded, none)
 - `has_embedded_metadata`: Boolean flag for embedded metadata presence in safetensors files
+- `is_duplicate`: Boolean flag indicating if this model is a duplicate (same hash as other models)
+- `duplicate_hash`: The hash that identifies the duplicate group this model belongs to
+- `duplicate_group_size`: Total number of models in the duplicate group (e.g., 2 if there are 2 copies)
+- `duplicate_group_index`: Index of this model within the duplicate group (1-based, e.g., 1 or 2)
 - `last_used`: Timestamp of last model usage
 - `created_at`: Timestamp of database record creation
 

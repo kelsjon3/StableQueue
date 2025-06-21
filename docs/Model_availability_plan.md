@@ -53,31 +53,36 @@
 ```javascript
 1. Scan for file
 
-2. Extract metadata (Forge JSON > Civitai JSON > Embedded)
+2. Create database entry for new file (`.safetensors`, `.pt`, `.ckpt`, `.gguf`, `.sft`, `.pth`) if filename OR local_path is unique. Populate filename and local_path columns in database. Report duplicates including filename and local_path in summary at end of scan
+
+3. Extract metadata (Forge JSON > Civitai JSON > Embedded)
    If no hash found in metadata:
    → Calculate AutoV2 hash (mandatory)
    → Calculate SHA256 hash (for verification)
+   → If 2 database entries with the same hash exist, delete the entry giving priority to entry with both hashes present
 
-3. Check database for hash
+4. Check database for hash
 
-4. If hash matches existing entry:
+5. If hash matches existing entry:
    → Same path: Update null fields with new metadata
    → Different path: Skip as duplicate, log for report
    
-5. If no duplicate or new model:
+6. If no duplicate or new model:
    → Check for missing Civitai fields  
-   → Call Civitai API using AutoV2 hash if needed
+   → Call Civitai API using AutoV2 hash if any of the Civitai fields have a null value
+   → If Civitai api call returns a 404, change all civitai fields with a null value to none
    
-6. Check for local preview image
+7. Check for local preview image named {modelname}.preview.jpeg
+   → If preview image exists, do not make civitai api call for preview image
 
-7. If no preview:
+8. If no preview:
    → Download from Civitai using AutoV2 hash
    → Save as modelname.preview.jpeg
 
-8. Write/update database record
+9. Write/update database record
 ```
 
-### **Key Principles:**
+ **Key Principles:**
 - **Hash is mandatory** - every model must have an AutoV2 hash before proceeding
 - **Database lookup by hash** - most reliable duplicate detection method
 - **Path verification** - same hash + different path = duplicate (skip)
@@ -85,7 +90,7 @@
 - **Civitai integration** - use AutoV2 hash for all API lookups
 - **Preview consistency** - only `*.preview.jpeg` format supported
 
-### **Performance Considerations:**
+**Performance Considerations:**
 - Hash calculation can be time-intensive but is essential for system reliability
 - Progress reporting shows estimated completion times
 - Batch processing with status updates every 10 models
@@ -310,7 +315,7 @@ Scan `MODEL_PATH` for model files and related metadata. Ensure every discovered 
 
 #### **Phase 1: File Discovery**
 Scan `MODEL_PATH` recursively for:
-- **Model files**: `.safetensors`, `.pt`, `.ckpt`
+- **Model files**: `.safetensors`, `.pt`, `.ckpt`, `.gguf`, `.sft`, `.pth`
 - **JSON metadata files**: All `*.json` files (regardless of naming convention)
 - **Preview images**: Files matching **exactly** `*.preview.jpeg` (ignore all other preview formats)
 

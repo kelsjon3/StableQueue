@@ -158,6 +158,33 @@ function runMigrations() {
             }
         }
         
+        // Migration 5: Add civitai_checked column for simplified Civitai API call logic
+        if (!columnNames.includes('civitai_checked')) {
+            try {
+                console.log("[ModelDB] Running migration: Adding civitai_checked column");
+                db.exec('ALTER TABLE models ADD COLUMN civitai_checked TEXT CHECK (civitai_checked IN (\'found\', \'not_found\'))');
+                console.log("[ModelDB] ✓ Added civitai_checked column");
+                migrationsRun++;
+            } catch (error) {
+                console.error("[ModelDB] ✗ Failed to add civitai_checked column:", error.message);
+            }
+        }
+        
+        // Migration 6: Add duplicate tracking fields
+        if (!columnNames.includes('is_duplicate')) {
+            try {
+                console.log("[ModelDB] Running migration: Adding duplicate tracking columns");
+                db.exec('ALTER TABLE models ADD COLUMN is_duplicate BOOLEAN DEFAULT FALSE');
+                db.exec('ALTER TABLE models ADD COLUMN duplicate_hash TEXT');
+                db.exec('ALTER TABLE models ADD COLUMN duplicate_group_size INTEGER');
+                db.exec('ALTER TABLE models ADD COLUMN duplicate_group_index INTEGER');
+                console.log("[ModelDB] ✓ Added duplicate tracking columns");
+                migrationsRun++;
+            } catch (error) {
+                console.error("[ModelDB] ✗ Failed to add duplicate tracking columns:", error.message);
+            }
+        }
+        
         if (migrationsRun > 0) {
             console.log(`[ModelDB] Completed ${migrationsRun} database migrations`);
             
@@ -206,7 +233,8 @@ function runMigrations() {
 function addOrUpdateModel(model) {
     try {
         // Check if model exists by civitai_version_id (primary identifier)
-        const existing = model.civitai_version_id ? 
+        // Note: 'none' means the field was set after a 404 error, so use filename+path matching instead
+        const existing = (model.civitai_version_id && model.civitai_version_id !== 'none') ? 
             db.prepare('SELECT id FROM models WHERE civitai_version_id = ?').get(model.civitai_version_id) :
             db.prepare('SELECT id FROM models WHERE filename = ? AND local_path = ?').get(model.filename, model.local_path);
         
@@ -235,6 +263,7 @@ function addOrUpdateModel(model) {
                 civitai_file_size_kb = COALESCE(?, civitai_file_size_kb),
                 civitai_nsfw = COALESCE(?, civitai_nsfw),
                 civitai_blurhash = COALESCE(?, civitai_blurhash),
+                civitai_checked = COALESCE(?, civitai_checked),
                 metadata_status = COALESCE(?, metadata_status),
                 metadata_source = COALESCE(?, metadata_source),
                 has_embedded_metadata = COALESCE(?, has_embedded_metadata),
@@ -265,6 +294,7 @@ function addOrUpdateModel(model) {
                 model.civitai_file_size_kb || null,
                 model.civitai_nsfw ? 1 : 0,
                 model.civitai_blurhash || null,
+                model.civitai_checked || null,
                 model.metadata_status || null,
                 model.metadata_source || null,
                 hasEmbeddedMetadata,
@@ -276,8 +306,8 @@ function addOrUpdateModel(model) {
             // Insert new model
             const insertStmt = db.prepare(`
                 INSERT INTO models (
-                    name, type, local_path, filename, preview_path, preview_url, civitai_id, civitai_version_id, forge_format, hash_autov2, hash_sha256, civitai_model_name, civitai_model_base, civitai_model_type, civitai_model_version_name, civitai_model_version_desc, civitai_model_version_date, civitai_download_url, civitai_trained_words, civitai_file_size_kb, civitai_nsfw, civitai_blurhash, metadata_status, metadata_source, has_embedded_metadata, last_used
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    name, type, local_path, filename, preview_path, preview_url, civitai_id, civitai_version_id, forge_format, hash_autov2, hash_sha256, civitai_model_name, civitai_model_base, civitai_model_type, civitai_model_version_name, civitai_model_version_desc, civitai_model_version_date, civitai_download_url, civitai_trained_words, civitai_file_size_kb, civitai_nsfw, civitai_blurhash, civitai_checked, metadata_status, metadata_source, has_embedded_metadata, last_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             `);
             
             // Ensure boolean conversion for has_embedded_metadata
@@ -306,6 +336,7 @@ function addOrUpdateModel(model) {
                 model.civitai_file_size_kb || null,
                 model.civitai_nsfw ? 1 : 0,
                 model.civitai_blurhash || null,
+                model.civitai_checked || null,
                 model.metadata_status || 'incomplete',
                 model.metadata_source || 'none',
                 hasEmbeddedMetadata
@@ -755,6 +786,97 @@ function deleteModel(modelId) {
     }
 }
 
+/**
+ * Mark a model as a duplicate
+ * @param {number} modelId - Model ID to mark as duplicate
+ * @param {string} duplicateHash - Hash that identifies the duplicate group
+ * @param {number} groupSize - Total number of models in the duplicate group
+ * @param {number} groupIndex - Index of this model within the group (1-based)
+ */
+function markModelAsDuplicate(modelId, duplicateHash, groupSize, groupIndex) {
+    try {
+        const stmt = db.prepare(`
+            UPDATE models SET 
+                is_duplicate = TRUE,
+                duplicate_hash = ?,
+                duplicate_group_size = ?,
+                duplicate_group_index = ?
+            WHERE id = ?
+        `);
+        
+        const result = stmt.run(duplicateHash, groupSize, groupIndex, modelId);
+        
+        if (result.changes === 0) {
+            throw new Error(`Model ID ${modelId} not found`);
+        }
+        
+        console.log(`[ModelDB] Marked model ID ${modelId} as duplicate (${groupIndex}/${groupSize} in group ${duplicateHash})`);
+        return true;
+    } catch (error) {
+        console.error(`[ModelDB] Failed to mark model ID ${modelId} as duplicate:`, error.message);
+        throw error;
+    }
+}
+
+/**
+ * Clear duplicate marking for a model
+ * @param {number} modelId - Model ID to clear duplicate marking
+ */
+function clearModelDuplicateStatus(modelId) {
+    try {
+        const stmt = db.prepare(`
+            UPDATE models SET 
+                is_duplicate = FALSE,
+                duplicate_hash = NULL,
+                duplicate_group_size = NULL,
+                duplicate_group_index = NULL
+            WHERE id = ?
+        `);
+        
+        const result = stmt.run(modelId);
+        
+        if (result.changes === 0) {
+            throw new Error(`Model ID ${modelId} not found`);
+        }
+        
+        console.log(`[ModelDB] Cleared duplicate status for model ID ${modelId}`);
+        return true;
+    } catch (error) {
+        console.error(`[ModelDB] Failed to clear duplicate status for model ID ${modelId}:`, error.message);
+        throw error;
+    }
+}
+
+/**
+ * Get all models that are marked as duplicates
+ * @returns {Array} Array of duplicate models grouped by hash
+ */
+function getDuplicateModels() {
+    try {
+        const stmt = db.prepare(`
+            SELECT * FROM models 
+            WHERE is_duplicate = TRUE 
+            ORDER BY duplicate_hash, duplicate_group_index
+        `);
+        
+        const duplicates = stmt.all();
+        
+        // Group by duplicate_hash
+        const grouped = {};
+        duplicates.forEach(model => {
+            if (!grouped[model.duplicate_hash]) {
+                grouped[model.duplicate_hash] = [];
+            }
+            grouped[model.duplicate_hash].push(model);
+        });
+        
+        return grouped;
+    } catch (error) {
+        console.error('[ModelDB] Failed to get duplicate models:', error.message);
+        return {};
+    }
+}
+
 // Initialize the database on module load
 initializeDatabase();
 
@@ -775,5 +897,8 @@ module.exports = {
     resetDatabase,
     runMigrations,
     isValidHash,
-    deleteModel
+    deleteModel,
+    markModelAsDuplicate,
+    clearModelDuplicateStatus,
+    getDuplicateModels
 }; 

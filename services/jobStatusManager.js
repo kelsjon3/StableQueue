@@ -86,12 +86,45 @@ function broadcastJobProgress(jobId, progressPercentage, previewImage) {
   // Broadcast to all clients
   io.emit('job_progress', progressData);
   
-  // Also broadcast to the specific job room
+  // Also send to clients specifically watching this job
   io.to(`job:${jobId}`).emit('job_progress', progressData);
+}
+
+// Broadcast scan progress update to all connected clients
+function broadcastScanProgress(scanData) {
+  if (!io) return;
+  
+  console.log(`[JobStatusManager] Broadcasting scan progress: ${scanData.current}/${scanData.total} - ${scanData.currentFile || 'Processing...'}`);
+  
+  // Broadcast scan progress to all clients
+  io.emit('scan_progress', scanData);
+}
+
+// Broadcast scan completion to all connected clients
+function broadcastScanComplete(stats) {
+  if (!io) return;
+  
+  console.log(`[JobStatusManager] Broadcasting scan completion with stats:`, stats);
+  
+  // Broadcast scan completion to all clients
+  io.emit('scan_complete', stats);
+}
+
+// Broadcast scan start to all connected clients
+function broadcastScanStart() {
+  if (!io) return;
+  
+  console.log(`[JobStatusManager] Broadcasting scan start`);
+  
+  // Broadcast scan start to all clients
+  io.emit('scan_start');
 }
 
 module.exports = {
   initialize,
   broadcastJobUpdate,
-  broadcastJobProgress
+  broadcastJobProgress,
+  broadcastScanProgress,
+  broadcastScanComplete,
+  broadcastScanStart
 }; 
