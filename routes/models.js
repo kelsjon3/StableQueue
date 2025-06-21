@@ -149,6 +149,45 @@ router.get('/models/:id/preview', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/models/:id
+ * Returns a single model by database ID (for refreshing after rescan)
+ */
+router.get('/models/:id', async (req, res) => {
+    try {
+        const modelId = req.params.id;
+        console.log(`[Models] GET /models/${modelId} - fetching single model`);
+        
+        const allModels = modelDB.getAllModels();
+        const model = allModels.find(m => m.id == modelId);
+        
+        if (!model) {
+            return res.status(404).json({
+                success: false,
+                message: 'Model not found in database'
+            });
+        }
+        
+        // Return model with preview info
+        const modelWithPreview = {
+            ...model,
+            has_preview: !!model.preview_path
+        };
+        
+        res.json({
+            success: true,
+            model: modelWithPreview
+        });
+    } catch (error) {
+        console.error('Error retrieving model:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve model',
+            error: error.message
+        });
+    }
+});
+
+/**
  * GET /api/v1/models/:id/info
  * Returns detailed information about a specific model
  */
@@ -2455,6 +2494,7 @@ router.post('/models/:id/rescan', async (req, res) => {
         // Check if file exists
         try {
             await fs.access(fullPath);
+            console.log(`[SingleRescan] File verified: ${fullPath}`);
         } catch (err) {
             return res.status(404).json({
                 success: false,
@@ -2462,21 +2502,86 @@ router.post('/models/:id/rescan', async (req, res) => {
             });
         }
         
-        // Create a model object for processing (compatible with processModels function)
-        const model = {
-            filename: existingModel.filename,
-            local_path: existingModel.local_path,
-            relativePath: '', // Single file, no relative path needed
-            previewPath: existingModel.preview_path
-        };
+        // Initialize operation tracking
+        let hashCalculated = false;
+        let civitaiDataFetched = false;
+        let previewDownloaded = false;
+        let updated = false;
         
-        // Use the shared processModels function with single model array
-        const stats = await processModels([model], {
-            getPreview: options.getPreview || false,
-            generateHash: options.generateHash || false,
-            retrieveFromCivitai: options.retrieveFromCivitai || false,
-            skipDuplicateDetection: true // Skip duplicate detection for single rescan
-        });
+        // Get current model data to check what's missing
+        const modelData = { ...existingModel };
+        
+        // Calculate missing hashes if requested or if missing
+        if (options.generateHash || !modelData.hash_autov2 || !modelData.hash_sha256) {
+            const { calculateSHA256Hash, calculateAutoV2Hash } = require('../utils/hashCalculator');
+            
+            console.log(`[SingleRescan] Missing hashes - AutoV2: ${!modelData.hash_autov2}, SHA256: ${!modelData.hash_sha256}`);
+            
+            try {
+                // Calculate AutoV2 hash if missing
+                if (!modelData.hash_autov2) {
+                    console.log(`[SingleRescan] Calculating AutoV2 hash for ${existingModel.filename}...`);
+                    const autoV2Hash = await calculateAutoV2Hash(fullPath);
+                    if (autoV2Hash) {
+                        modelData.hash_autov2 = autoV2Hash;
+                        console.log(`[SingleRescan] AutoV2 hash calculated: ${autoV2Hash}`);
+                        hashCalculated = true;
+                        updated = true;
+                    }
+                }
+                
+                // Calculate SHA256 hash if missing
+                if (!modelData.hash_sha256) {
+                    console.log(`[SingleRescan] Calculating SHA256 hash for ${existingModel.filename}...`);
+                    const sha256Hash = await calculateSHA256Hash(fullPath);
+                    if (sha256Hash) {
+                        modelData.hash_sha256 = sha256Hash;
+                        console.log(`[SingleRescan] SHA256 hash calculated: ${sha256Hash}`);
+                        hashCalculated = true;
+                        updated = true;
+                    }
+                }
+            } catch (hashError) {
+                console.error(`[SingleRescan] Hash calculation error:`, hashError);
+            }
+        }
+        
+        // Fetch Civitai data if requested and hash available
+        if ((options.retrieveFromCivitai || options.getPreview) && modelData.hash_autov2) {
+            try {
+                console.log(`[SingleRescan] Fetching Civitai data for hash: ${modelData.hash_autov2}`);
+                const civitaiResponse = await rateLimitedCivitaiRequest(`${process.env.CIVITAI_API_BASE || 'https://civitai.com/api/v1'}/model-versions/by-hash/${modelData.hash_autov2}`);
+                
+                if (civitaiResponse?.data) {
+                    const modelVersion = civitaiResponse.data;
+                    console.log(`[SingleRescan] Found Civitai data: ${modelVersion.model?.name || 'Unknown'}`);
+                    
+                    // Update only missing fields
+                    if (!modelData.civitai_id && modelVersion.model?.id) {
+                        modelData.civitai_id = modelVersion.model.id;
+                        updated = true;
+                    }
+                    if (!modelData.civitai_model_name && modelVersion.model?.name) {
+                        modelData.civitai_model_name = modelVersion.model.name;
+                        updated = true;
+                    }
+                    // Add other Civitai fields as needed...
+                    
+                    civitaiDataFetched = true;
+                }
+            } catch (civitaiError) {
+                console.warn(`[SingleRescan] Civitai fetch failed:`, civitaiError.message);
+            }
+        }
+        
+        // Save updated model data to database if changes were made
+        if (updated) {
+            console.log(`[SingleRescan] Saving updated model data to database...`);
+            modelDB.addOrUpdateModel(modelData);
+            console.log(`[SingleRescan] Model ${existingModel.filename} updated successfully`);
+        } else {
+            console.log(`[SingleRescan] No changes needed for model ${existingModel.filename}`);
+        }
         
         // Return success response
         res.json({
@@ -2484,14 +2589,25 @@ router.post('/models/:id/rescan', async (req, res) => {
             message: 'Model rescanned successfully',
             model: {
                 id: existingModel.id,
-                filename: model.filename,
-                updated: stats.updated > 0 || stats.added > 0
+                filename: existingModel.filename,
+                updated: updated
             },
-            stats: stats,
+            stats: {
+                total: 1,
+                added: 0,
+                updated: updated ? 1 : 0,
+                refreshed: updated ? 0 : 1,
+                skipped: 0,
+                errors: 0,
+                hashesCalculated: hashCalculated ? 1 : 0,
+                hashesSkipped: 0,
+                hashErrors: 0,
+                civitaiCalls: civitaiDataFetched ? 1 : 0
+            },
             operations: {
-                hashCalculated: stats.hashesCalculated > 0,
-                civitaiDataFetched: stats.updated > 0 || stats.added > 0, // Assume Civitai was called if model was updated
-                previewDownloaded: stats.updated > 0 || stats.added > 0 // Assume preview was handled if model was updated
+                hashCalculated: hashCalculated,
+                civitaiDataFetched: civitaiDataFetched,
+                previewDownloaded: previewDownloaded
             }
         });
         

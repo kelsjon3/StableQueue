@@ -1408,6 +1408,62 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Make fetchAndDisplayModels globally accessible for modal buttons
+    window.fetchAndDisplayModels = fetchAndDisplayModels;
+
+    // Function to refresh a specific model after rescan without reloading everything
+    async function refreshSpecificModel(modelId) {
+        try {
+            console.log(`Refreshing specific model ID: ${modelId}`);
+            
+            // Fetch updated model data from API
+            const response = await fetch(`/api/v1/models/${modelId}`);
+            const data = await response.json();
+            
+            if (data.success && data.model) {
+                console.log(`Updated model data received for: ${data.model.filename}`);
+                
+                // Update the model in our cache
+                const modelIndex = allModelsCache.findIndex(m => m.id == modelId);
+                if (modelIndex !== -1) {
+                    allModelsCache[modelIndex] = data.model;
+                    console.log(`Updated model in cache at index ${modelIndex}`);
+                    
+                    // Re-apply filters and render (this will update the specific card)
+                    applyFiltersAndRender();
+                    
+                    // Optionally scroll to the updated model card
+                    setTimeout(() => {
+                        const modelCard = document.querySelector(`[data-model-id="${modelId}"]`);
+                        if (modelCard) {
+                            modelCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            // Add a brief highlight effect
+                            modelCard.style.transition = 'box-shadow 0.3s ease';
+                            modelCard.style.boxShadow = '0 0 15px rgba(74, 144, 226, 0.6)';
+                            setTimeout(() => {
+                                modelCard.style.boxShadow = '';
+                            }, 2000);
+                        }
+                    }, 100);
+                } else {
+                    console.warn(`Model ID ${modelId} not found in cache, doing full refresh`);
+                    await fetchAndDisplayModels();
+                }
+            } else {
+                console.error('Failed to fetch updated model data:', data.message);
+                // Fallback to full refresh
+                await fetchAndDisplayModels();
+            }
+        } catch (error) {
+            console.error('Error refreshing specific model:', error);
+            // Fallback to full refresh
+            await fetchAndDisplayModels();
+        }
+    }
+
+    // Make refreshSpecificModel globally accessible for modal buttons
+    window.refreshSpecificModel = refreshSpecificModel;
+
     // Function to update base model filter options (only when needed)
     function updateBaseModelFilterOptions() {
         const newBaseModels = new Set(allModelsCache.map(model => model.civitai_model_base).filter(Boolean));
@@ -1448,6 +1504,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Debounce the rendering to prevent rapid successive calls
         renderDebounceTimer = setTimeout(() => {
             // Get current filter values
+            const sortBy = document.getElementById('model-sort-by')?.value || 'name';
             const typeFilter = document.getElementById('model-type-filter')?.value || 'all';
             const baseModelFilter = document.getElementById('model-base-filter')?.value || 'all';
             const availabilityFilter = document.getElementById('model-availability-filter')?.value || 'all';
@@ -1462,8 +1519,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (searchTerm) {
                 filtered = filtered.filter(model => {
                     const searchableText = [
+                        (model.civitai_model_name && model.civitai_model_name !== 'none') ? model.civitai_model_name : '',
                         model.name || '',
                         model.filename || '',
+                        (model.civitai_model_type && model.civitai_model_type !== 'none') ? model.civitai_model_type : '',
                         model.type || '',
                         model.civitai_model_base || '',
                         model.civitai_description || '',
@@ -1510,7 +1569,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
             
-            console.log(`Rendering ${filtered.length} filtered models (search: "${searchTerm}")`);
+            // Sort models based on selected sort option
+            filtered.sort((a, b) => {
+                let aValue, bValue;
+                
+                switch (sortBy) {
+                    case 'name':
+                        aValue = ((a.civitai_model_name && a.civitai_model_name !== 'none') ? a.civitai_model_name : a.name || a.filename || '').toLowerCase();
+                        bValue = ((b.civitai_model_name && b.civitai_model_name !== 'none') ? b.civitai_model_name : b.name || b.filename || '').toLowerCase();
+                        break;
+                    case 'type':
+                        aValue = ((a.civitai_model_type && a.civitai_model_type !== 'none') ? a.civitai_model_type : a.type || '').toLowerCase();
+                        bValue = ((b.civitai_model_type && b.civitai_model_type !== 'none') ? b.civitai_model_type : b.type || '').toLowerCase();
+                        break;
+                    case 'base_model':
+                        aValue = (a.civitai_model_base || '').toLowerCase();
+                        bValue = (b.civitai_model_base || '').toLowerCase();
+                        break;
+                    case 'filename':
+                        aValue = (a.filename || '').toLowerCase();
+                        bValue = (b.filename || '').toLowerCase();
+                        break;
+                    default:
+                        aValue = ((a.civitai_model_name && a.civitai_model_name !== 'none') ? a.civitai_model_name : a.name || a.filename || '').toLowerCase();
+                        bValue = ((b.civitai_model_name && b.civitai_model_name !== 'none') ? b.civitai_model_name : b.name || b.filename || '').toLowerCase();
+                        break;
+                }
+                
+                return aValue.localeCompare(bValue);
+            });
+            
+            console.log(`Rendering ${filtered.length} filtered models (search: "${searchTerm}", sorted by: ${sortBy})`);
             
             // Update search results count
             updateSearchResultsCount(filtered.length, allModelsCache.length, searchTerm);
@@ -1570,17 +1659,29 @@ document.addEventListener('DOMContentLoaded', () => {
             const card = document.createElement('div');
             card.className = 'model-card';
             
-            // Add NSFW data attribute for blur functionality
+            // Add model ID and NSFW data attributes
+            card.dataset.modelId = model.id;
             card.dataset.nsfw = model.civitai_nsfw ? 'true' : 'false';
             
             // Safely escape text content and apply search highlighting
-            const safeName = escapeHtml(model.name || model.filename || 'Unknown Model');
-            const safeType = escapeHtml(model.type || 'Unknown Type');
+            // Prioritize civitai_model_name, then name, then filename as fallback
+            // Ignore civitai_model_name if it's 'none'
+            const displayName = (model.civitai_model_name && model.civitai_model_name !== 'none') 
+                ? model.civitai_model_name 
+                : model.name || model.filename || 'Unknown Model';
+            const safeName = escapeHtml(displayName);
+            // Use civitai_model_type as primary source, fall back to database type field
+            // Ignore civitai_model_type if it's 'none'
+            const modelType = (model.civitai_model_type && model.civitai_model_type !== 'none') 
+                ? model.civitai_model_type 
+                : model.type || 'Unknown Type';
+            const safeType = escapeHtml(modelType);
             const highlightedName = searchTerm ? highlightSearchTerms(safeName, searchTerm) : safeName;
             const highlightedType = searchTerm ? highlightSearchTerms(safeType, searchTerm) : safeType;
             
-            // Get model type icon for placeholder
-            const typeIcon = model.type === 'lora' ? '🎨' : '🖼️';
+            // Get model type icon for placeholder - check both civitai and database type
+            const typeForIcon = ((model.civitai_model_type && model.civitai_model_type !== 'none') ? model.civitai_model_type : model.type || '').toLowerCase();
+            const typeIcon = typeForIcon === 'lora' ? '🎨' : '🖼️';
             
             // Get preview URL for the model
             const previewUrl = getModelPreviewUrl(model);
@@ -2246,6 +2347,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Set up filter event listeners
         const filterIds = [
+            'model-sort-by',
             'model-type-filter',
             'model-base-filter',
             'model-availability-filter',
@@ -2651,15 +2753,61 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 if (result.success) {
                     hideGenericModal();
-                    showGenericModal('Success', `
+                    
+                    // Build detailed success message based on what was actually done
+                    let detailsHtml = '';
+                    let hasChanges = false;
+                    
+                    if (result.operations.hashCalculated) {
+                        detailsHtml += '• <strong>Hash calculated</strong><br>';
+                        if (result.stats.hashesCalculated > 0) {
+                            detailsHtml += '&nbsp;&nbsp;→ AutoV2 and/or SHA256 hash generated<br>';
+                        }
+                        hasChanges = true;
+                    }
+                    
+                    if (result.operations.civitaiDataFetched) {
+                        detailsHtml += '• <strong>Civitai data retrieved</strong><br>';
+                        detailsHtml += '&nbsp;&nbsp;→ Model information and metadata updated<br>';
+                        hasChanges = true;
+                    }
+                    
+                    if (result.operations.previewDownloaded) {
+                        detailsHtml += '• <strong>Preview image downloaded</strong><br>';
+                        hasChanges = true;
+                    }
+                    
+                    // Show stats summary
+                    if (result.stats) {
+                        if (result.stats.updated > 0) {
+                            detailsHtml += `• <strong>Database updated</strong> (${result.stats.updated} record)<br>`;
+                        } else if (result.stats.refreshed > 0) {
+                            detailsHtml += '• <strong>No new data found</strong><br>';
+                            detailsHtml += '&nbsp;&nbsp;→ All fields already populated<br>';
+                        }
+                    }
+                    
+                    // If no operations were performed, show a helpful message
+                    if (!hasChanges) {
+                        detailsHtml = '• <strong>No missing data found</strong><br>';
+                        detailsHtml += '&nbsp;&nbsp;→ All fields are already populated<br>';
+                        detailsHtml += '&nbsp;&nbsp;→ No action required<br>';
+                    }
+                    
+                    const title = hasChanges ? 'Data Added Successfully' : 'Scan Complete';
+                    const icon = hasChanges ? '✓' : 'ℹ️';
+                    
+                    showGenericModal(title, `
                         <div style="text-align: center; padding: 1rem;">
-                            <div style="margin-bottom: 1rem; color: var(--success-color);">✓ Model rescanned successfully!</div>
-                            <div style="font-size: 0.9rem; color: var(--text-secondary);">
-                                ${result.operations.hashCalculated ? '• Hash calculated<br>' : ''}
-                                ${result.operations.civitaiDataFetched ? '• Civitai data retrieved<br>' : ''}
-                                ${result.operations.previewDownloaded ? '• Preview image downloaded<br>' : ''}
+                            <div style="margin-bottom: 1rem; color: var(--success-color); font-size: 1.1rem;">${icon} Model rescanned successfully!</div>
+                            <div style="text-align: left; font-size: 0.9rem; color: var(--text-secondary); background: var(--bg-secondary); padding: 0.75rem; border-radius: 4px; margin: 1rem 0; border-left: 3px solid var(--accent-primary);">
+                                <strong>Changes Made:</strong><br><br>
+                                ${detailsHtml}
                             </div>
-                            <button onclick="hideGenericModal(); fetchAndDisplayModels();" style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">Refresh Models</button>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
+                                Model: <strong>${result.model.filename}</strong>
+                            </div>
+                            <button onclick="hideGenericModal(); refreshSpecificModel(${result.model.id});" style="margin-top: 0.5rem; padding: 0.5rem 1rem; background: var(--accent-primary); border: none; color: white; border-radius: 4px; cursor: pointer;">${hasChanges ? 'Show Updated Model' : 'OK'}</button>
                         </div>
                     `);
                 } else {
